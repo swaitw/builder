@@ -1,5 +1,7 @@
-export default function ErrorBoundary(props: any) {
-  // Noop component to allow implementing per framework
-  // TODO: get <>{props.children}</> to work
-  return props.children;
+/**
+ * TO-DO: this is broken for Qwik/RN/RSC SDKs. Mitosis code needs fixing.
+ * @returns
+ */
+export default function ErrorBoundary(props: { children: any }) {
+  return <>{props.children}</>;
 }

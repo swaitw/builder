@@ -1,3 +1,4 @@
+'use client';
 import React from 'react';
 import {
   builder,
@@ -88,7 +89,14 @@ export class BuilderContent<ContentType extends object = any> extends React.Comp
     let options = {
       ...(this.props.options || ({} as GetContentOptions)),
     };
-    if (this.props.content && !options.initialContent?.length) {
+    if (!options.key && this.props.content?.id && !Builder.isEditing && !Builder.isPreviewing) {
+      options.key = this.props.content.id;
+    }
+    if (
+      this.props.content &&
+      !options.initialContent?.length &&
+      (this.props.inline || !Builder.isPreviewing)
+    ) {
       options.initialContent = [this.props.content];
     }
 
@@ -112,6 +120,9 @@ export class BuilderContent<ContentType extends object = any> extends React.Comp
   };
 
   onWindowMessage = (event: MessageEvent) => {
+    const isTrusted = Builder.isTrustedHostForEvent(event);
+    if (!isTrusted) return;
+
     const message = event.data;
     if (!message) {
       return;
@@ -133,17 +144,17 @@ export class BuilderContent<ContentType extends object = any> extends React.Comp
         if (location.href.includes('builder.debug=true')) {
           eval('debugger');
         }
+        let newData = this.state.data as any;
         for (const patch of patches) {
-          applyPatchWithMinimalMutationChain(this.state.data, patch);
+          newData = applyPatchWithMinimalMutationChain(newData, patch, false);
         }
         this.setState({
           updates: this.state.updates + 1,
-          data: this.state.data ? { ...this.state.data } : this.state.data,
+          data: newData,
         });
         if (this.props.contentLoaded) {
-          this.props.contentLoaded(this.state.data?.data, this.state.data);
+          this.props.contentLoaded(newData.data, newData);
         }
-
         break;
       }
     }
@@ -162,14 +173,16 @@ export class BuilderContent<ContentType extends object = any> extends React.Comp
     // Temporary to test metrics diving in with bigquery and heatmaps
     // this.builder.autoTrack = true;
     // this.builder.env = 'development';
-    if (!this.props.inline || Builder.isEditing) {
+    if (!this.props.inline || Builder.isEditing || Builder.isPreviewing) {
       this.subscribeToContent();
     } else if (this.props.inline && this.options?.initialContent?.length) {
       const contentData = this.options.initialContent[0];
       // TODO: intersectionobserver like in subscribetocontent - reuse the logic
-      this.builder.trackImpression(contentData.id, this.renderedVariantId, undefined, {
-        content: contentData,
-      });
+      if (contentData?.id) {
+        this.builder.trackImpression(contentData.id, this.renderedVariantId, undefined, {
+          content: contentData,
+        });
+      }
     }
 
     if (Builder.isEditing) {
@@ -183,13 +196,24 @@ export class BuilderContent<ContentType extends object = any> extends React.Comp
     if (this.name !== '_inline') {
       // TODO:... using targeting...? express.request hmmm
       this.subscriptions.add(
-        builder.queueGetContent(this.name, this.options).subscribe(
+        this.builder.queueGetContent(this.name, this.options).subscribe(
           matches => {
             const match = matches && matches[0];
             this.setState({
               data: match,
               loading: false,
             });
+            // when BuilderContent is wrapping a BuilderComponent of the same model, the BuilderComponent is passing initialContent on the same key
+            // causing the sdk to resolve this call to the initialContent instead of the previewed/edited content
+            // so we test here if the BuilderContent is being used directly ( not inlined ) and it has initial content ( content prop ), we let the first render go through to show the initial content
+            // and we subscribe again to get the draft/editing content
+            const isPreviewing =
+              (this.builder.editingModel || this.builder.previewingModel) === this.name;
+            if (!this.props.inline && this.props.content && this.firstLoad && isPreviewing) {
+              this.firstLoad = false;
+              this.subscriptions.unsubscribe();
+              this.subscribeToContent();
+            }
 
             if (match && this.firstLoad) {
               this.firstLoad = false;

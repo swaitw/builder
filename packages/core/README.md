@@ -1,6 +1,6 @@
-# Builder Core
+# Builder Core SDK
 
-## Getting Started
+This SDK is largely a wrapper over our [Content API](https://www.builder.io/c/docs/content-api)
 
 ```javascript
 import { builder } from '@builder.io/sdk';
@@ -31,13 +31,17 @@ builder
   .getAll(YOUR_MODEL_NAME, {
     limit: 10,
   })
-  .promise()
-  .then(({ data }) => {
-    // Do something with the data
+  .then(results => {
+    // Do something with the results
   });
 
 // Turn of cookies/tracking
 builder.canTrack = false;
 ```
 
-If you have questions or comments, don't hesitate to reach out by creating an issue or emailing steve@builder.io
+View all options for `builder.get` [here](./docs/interfaces/GetContentOptions.md)
+
+Learn more about how to use the Builder core SDK:
+
+- [Content API](https://www.builder.io/c/docs/content-api)
+- [Querying Cheatsheet](https://www.builder.io/c/docs/querying)

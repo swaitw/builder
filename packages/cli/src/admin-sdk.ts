@@ -16,8 +16,7 @@ const MULTIBAR = new cliProgress.MultiBar(
   cliProgress.Presets.shades_grey
 );
 
-// todo change this to prod
-const root = 'https://qa.builder.io';
+const root = 'https://cdn.builder.io';
 
 const createGraphqlClient = (privateKey: string) =>
   createClient({
@@ -78,7 +77,7 @@ export const importSpace = async (
       );
       await Promise.all(
         content.map(async (entry, index) => {
-          const filename = `${directory}/${modelName}/${kebabCase(entry.name)}.json`;
+          const filename = `${directory}/${modelName}/${kebabCase(entry.name)}-${index}.json`;
           await fse.outputFile(filename, JSON.stringify(entry, undefined, 2));
           modelProgress.increment(1, { name: ` ${modelName}: ${filename} ` });
         })
@@ -132,9 +131,9 @@ export const newSpace = async (
       }),
       {}
     );
-    const spaceContentIdsMap = (Object.values(
-      spaceSettings.cloneInfo.contentIdMap
-    ) as string[]).reduce<Record<string, string>>(
+    const spaceContentIdsMap = (
+      Object.values(spaceSettings.cloneInfo.contentIdMap) as string[]
+    ).reduce<Record<string, string>>(
       (contenIdMap, id) => ({
         ...contenIdMap,
         [id]: createHash('sha256')

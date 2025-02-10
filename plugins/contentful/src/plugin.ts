@@ -11,8 +11,7 @@ registerDataPlugin(
   {
     id: pluginId,
     name: 'Contentful',
-    icon:
-      'https://cdn.builder.io/api/v1/image/assets%2FYJIGb4i01jvw0SRdL5Bt%2Fd6097cd40fef4b94b18a3e0c4c53584d',
+    icon: 'https://cdn.builder.io/api/v1/image/assets%2FYJIGb4i01jvw0SRdL5Bt%2Fd6097cd40fef4b94b18a3e0c4c53584d',
     settings: [
       {
         name: 'spaceId',
@@ -28,6 +27,24 @@ registerDataPlugin(
         helperText:
           'Get your access token, from your contentful space settings > API Keys https://www.contentful.com/developers/docs/references/authentication/',
       },
+      {
+        name: 'limit',
+        type: 'number',
+        required: false,
+        min: 1,
+        max: 1000,
+        default: 100,
+        helperText:
+          'Sets the limit of content types retrieved from Contentful https://www.contentful.com/developers/docs/references/content-management-api/',
+      },
+      {
+        name: 'environment',
+        type: 'string',
+        required: false,
+        defaultValue: 'master',
+        helperText:
+          'The environment you used when generating your access token. This defaults to "master." Learn more: https://www.contentful.com/developers/docs/references/authentication/',
+      },
     ],
     ctaText: `Connect your Contentful space`,
   },
@@ -35,23 +52,45 @@ registerDataPlugin(
   async settings => {
     const spaceId = settings.get('spaceId')?.trim();
     const accessToken = settings.get('accessToken')?.trim();
+    const contentTypesLimit = settings.get('limit') || 100;
+    const environment = settings.get('environment')?.trim() || 'master';
     const client = await contentful.createClient({
       space: spaceId,
       accessToken,
+      environment,
     });
+
     return {
       async getResourceTypes() {
-        const contentTypes = await client.getContentTypes();
-        const buildUrl = (url: string, single = false) => {
-          return `${appState.config.apiRoot()}/api/v1/contentful-proxy?single=${single}&select=fields&url=${encodeURIComponent(
-            url
-          )}`;
+        const contentTypes = await client.getContentTypes({ limit: contentTypesLimit });
+        const buildUrl = (url: string, locale: string, single = false) => {
+          return `${appState.config.apiRoot()}/api/v1/contentful-proxy?${
+            locale ? `locale=${locale}&` : ''
+          }single=${single}&select=fields&url=${encodeURIComponent(url)}`;
         };
 
+        const locales = await client.getLocales();
+        const localeEnum = locales.items
+          .map(item => ({ value: item.code, label: item.name }))
+          .concat([
+            {
+              label: 'Dynamic (bound to state)',
+              value: '{{state.locale || ""}}',
+            },
+          ]);
         return contentTypes.items.map(type => ({
           name: type.name,
           id: type.sys.id,
           canPickEntries: true,
+          entryInputs: () => {
+            return [
+              {
+                name: 'locale',
+                type: 'text',
+                enum: localeEnum,
+              },
+            ];
+          },
           inputs: () => {
             const acceptableFields = type.fields.filter(field =>
               ['Text', 'Boolean', 'Number', 'Symbol'].includes(field.type)
@@ -75,7 +114,11 @@ registerDataPlugin(
                 max: 100,
                 type: 'number',
               },
-
+              {
+                name: 'locale',
+                type: 'text',
+                enum: localeEnum,
+              },
               {
                 name: 'order',
                 type: 'string',
@@ -113,13 +156,15 @@ registerDataPlugin(
 
             return fields;
           },
-          toUrl: (options: any) => {
+          toUrl: (userOptions: any) => {
+            const { locale, ...options } = userOptions;
             // by entry
             // https://cdn.contentful.com/spaces/{space_id}/environments/{environment_id}/entries/{entry_id}?access_token={access_token}
             if (options.entry) {
               // todo: maybe environment should be an input
               return buildUrl(
-                `https://cdn.contentful.com/spaces/${spaceId}/environments/master/entries?access_token=${accessToken}&content_type=${type.sys.id}&sys.id=${options.entry}&include=10`,
+                `https://cdn.contentful.com/spaces/${spaceId}/environments/${environment}/entries?access_token=${accessToken}&content_type=${type.sys.id}&sys.id=${options.entry}&include=10`,
+                locale,
                 true
               );
             }
@@ -141,7 +186,8 @@ registerDataPlugin(
             );
             // by query
             return buildUrl(
-              `https://cdn.contentful.com/spaces/${spaceId}/environments/master/entries?${params}`
+              `https://cdn.contentful.com/spaces/${spaceId}/environments/${environment}/entries?${params}`,
+              locale
             );
           },
         }));
