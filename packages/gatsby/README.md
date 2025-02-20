@@ -22,13 +22,16 @@ module.exports = {
       options: {
         // public API Key
         publicAPIKey: 'MY_PUBLIC_API_KEY',
-        // optional
+        // OPTIONAL
+        // Set this to `true` to rely on our cached content. Default value is `false`, always fetching the newest content from Builder.
+        useCache: false,
+        // OPTIONAL
         // mapping model names to template files, the plugin will create a page for each entry of the model at its specified url
         templates: {
           // `page` can be any model of choice, camelCased
           page: path.resolve('templates/my-page.tsx'),
         },
-        // optional
+        // OPTIONAL
         mapEntryToContext: async ({ entry, graphql }) => {
           const result = await graphql('....');
           return {
@@ -38,7 +41,8 @@ module.exports = {
             /* ... */
           };
         },
-        // optional, to resolve a single entry to multiple, for e.g in localization
+        // OPTIONAL
+        // to resolve a single entry to multiple, for e.g in localization
         resolveDynamicEntries: async (entries) => {
           const entriesToBuild = []
           for entry of entries {
@@ -101,5 +105,5 @@ For an up-to-date complete examples check out the [Gatsby + Builder.io starter](
 ## Learn more
 
 - [Gatsby + Builder.io starter](https://github.com/BuilderIO/gatsby-starter-builder)
-- [Design system example](https://github.com/BuilderIO/builder/tree/master/examples/react-design-system)
+- [Design system example](https://github.com/BuilderIO/builder/tree/main/examples/react-design-system)
 - [Official docs](https://www.builder.io/c/docs/getting-started)

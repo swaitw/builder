@@ -1,9 +1,11 @@
 import type { GetStaticPropsContext, InferGetStaticPropsType } from 'next'
 import { useRouter } from 'next/router'
-import { BuilderComponent, Builder, builder } from '@builder.io/react'
+import { BuilderComponent, builder, useIsPreviewing } from '@builder.io/react'
 import DefaultErrorPage from 'next/error'
 import Head from 'next/head'
 import builderConfig from '@config/builder'
+// loading widgets dynamically to reduce bundle size, will only be included in bundle when is used in the content
+import '@builder.io/widgets/dist/lib/builder-widgets-async'
 
 builder.init(builderConfig.apiKey)
 
@@ -46,29 +48,24 @@ export default function Page({
   page,
 }: InferGetStaticPropsType<typeof getStaticProps>) {
   const router = useRouter()
+  const isPreviewingInBuilder = useIsPreviewing()
+  const show404 = !page && !isPreviewingInBuilder
+
   if (router.isFallback) {
     return <h1>Loading...</h1>
-  }
-  const isLive = !Builder.isEditing && !Builder.isPreviewing
-  if (!page && isLive) {
-    return (
-      <>
-        <Head>
-          <meta name="robots" content="noindex" />
-          <meta name="title"></meta>
-        </Head>
-        <DefaultErrorPage statusCode={404} />
-      </>
-    )
   }
 
   return (
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {!page && <meta name="robots" content="noindex" />}
       </Head>
-
-      <BuilderComponent model="page" content={page} />
+      {show404 ? (
+        <DefaultErrorPage statusCode={404} />
+      ) : (
+        <BuilderComponent model="page" content={page} />
+      )}
     </>
   )
 }

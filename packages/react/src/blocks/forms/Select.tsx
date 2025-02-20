@@ -1,3 +1,4 @@
+'use client';
 import React from 'react';
 import { Builder } from '@builder.io/sdk';
 import { withBuilder } from '../../functions/with-builder';
@@ -8,6 +9,7 @@ export interface FormSelectProps {
   name?: string;
   value?: string;
   defaultValue?: string;
+  required?: boolean;
 }
 
 class FormSelectComponent extends React.Component<FormSelectProps> {
@@ -19,6 +21,7 @@ class FormSelectComponent extends React.Component<FormSelectProps> {
         key={Builder.isEditing && this.props.defaultValue ? this.props.defaultValue : 'default-key'}
         defaultValue={this.props.defaultValue}
         name={this.props.name}
+        required={this.props.required}
         {...this.props.attributes}
       >
         {options &&

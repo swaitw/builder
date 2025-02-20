@@ -5,12 +5,15 @@ import regexReplace from 'rollup-plugin-re';
 import replace from 'rollup-plugin-replace';
 import sourceMaps from 'rollup-plugin-sourcemaps';
 import typescript from 'rollup-plugin-typescript2';
+import serve from 'rollup-plugin-serve';
 
 const pkg = require('./package.json');
 
 const libraryName = 'builder-widgets';
 
 const resolvePlugin = resolve();
+
+const SERVE = process.env.SERVE === 'true';
 
 const externalDependencies = Object.keys(pkg.dependencies)
   .concat(Object.keys(pkg.optionalDependencies || {}))
@@ -43,17 +46,21 @@ const options = {
         'node_modules/react/index.js': [
           'cloneElement',
           'createContext',
+          'createRef',
           'Component',
           'createElement',
           'forwardRef',
           'Fragment',
           'useContext',
+          'useState',
+          'useEffect',
         ],
         'node_modules/react-dom/index.js': ['render', 'hydrate'],
         'node_modules/react-is/index.js': ['isElement', 'isValidElementType', 'ForwardRef'],
         '../react/node_modules/react/index.js': [
           'cloneElement',
           'createContext',
+          'createRef',
           'Component',
           'createElement',
           'forwardRef',
@@ -138,7 +145,6 @@ export default [
         }),
         replace({
           'React.Fragment': '"span"',
-          'React.createContext': `require('create-react-context')`,
         }),
         regexReplace({
           // ... do replace before commonjs
@@ -189,6 +195,21 @@ export default [
         resolve({
           only: [/^\.{0,2}\//, /lodash\-es/],
         }),
+        // Resolve source maps to the original source
+        sourceMaps(),
+        ...(SERVE
+          ? [
+              serve({
+                contentBase: 'dist',
+                port: 1268,
+                headers: {
+                  'Access-Control-Allow-Origin': '*',
+                  // https://developer.chrome.com/blog/private-network-access-preflight/#new-in-pna
+                  'Access-Control-Allow-Private-Network': 'true',
+                },
+              }),
+            ]
+          : []),
       ]),
   },
   {

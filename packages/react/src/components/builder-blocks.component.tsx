@@ -5,6 +5,8 @@ import { Builder } from '@builder.io/sdk';
 import { BuilderBlock } from './builder-block.component';
 // TODO: fetch these for user and send them with same response like graphql
 import { Size } from '../constants/device-sizes.constant';
+import ReactDOM from 'react-dom';
+import { BuilderStoreContext } from '../store/builder-store';
 
 export interface BuilderBlocksProps {
   fieldName?: string;
@@ -27,6 +29,7 @@ interface BuilderBlocksState {
 
 // TODO: options to set direciotn
 export class BuilderBlocks extends React.Component<BuilderBlocksProps, BuilderBlocksState> {
+  hydrated = false;
   get isRoot() {
     return !this.props.child;
   }
@@ -54,6 +57,10 @@ export class BuilderBlocks extends React.Component<BuilderBlocksProps, BuilderBl
       return this.props.parentElementId;
     }
     return this.props.parent && this.props.parent.id;
+  }
+
+  componentDidMount() {
+    this.hydrated = true;
   }
 
   onClickEmptyBlocks = () => {
@@ -103,17 +110,18 @@ export class BuilderBlocks extends React.Component<BuilderBlocksProps, BuilderBl
           (this.props.className ? ' ' + this.props.className : '')
         }
         builder-type="blocks"
-        // TODO: only fi in iframe?
-        builder-path={Builder.isIframe ? this.path : undefined}
+        builder-path={Builder.isIframe && this.hydrated ? this.path : undefined}
         builder-parent-id={this.parentId}
-        css={{
-          ...(!this.props.emailMode && {
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'stretch',
-          }),
-          ...this.props.style,
-        }}
+        css={
+          {
+            ...(!this.props.emailMode && {
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'stretch',
+            }),
+            ...this.props.style,
+          } as any
+        }
         onClick={() => {
           if (this.noBlocks) {
             this.onClickEmptyBlocks();
@@ -143,6 +151,32 @@ export class BuilderBlocks extends React.Component<BuilderBlocksProps, BuilderBl
           )) ||
           blocks}
       </TagName>
+    );
+  }
+
+  static renderInto(
+    elementOrSelector: string | HTMLElement,
+    props: BuilderBlocksProps = {},
+    builderState: any
+  ) {
+    if (!elementOrSelector) {
+      return;
+    }
+
+    let element: Element | null = null;
+
+    if (typeof elementOrSelector === 'string') {
+      element = document.querySelector(elementOrSelector);
+    } else {
+      if (elementOrSelector instanceof Element) {
+        element = elementOrSelector;
+      }
+    }
+    return ReactDOM.render(
+      <BuilderStoreContext.Provider value={builderState}>
+        <BuilderBlocks {...props} />
+      </BuilderStoreContext.Provider>,
+      element
     );
   }
 }
