@@ -20,6 +20,10 @@ export interface Animation {
   easing?: string;
   // TODO: deprecate - only here because of an API bug
   id?: string;
+  // only apply in scrollInView
+  repeat?: boolean;
+  // only apply in scrollInView, number from -1 to 1
+  thresholdPercent?: number;
 }
 
 export class Animator {
@@ -111,11 +115,14 @@ export class Animator {
         // TODO: maybe remove/reset transitoin property after animation duration
 
         // TODO: queue timers
-        setTimeout(() => {
-          // TODO: what if has other transition (reset back to what it was)
-          element.style.transition = '';
-          element.style.transitionDelay = '';
-        }, (animation.delay || 0) * 1000 + animation.duration * 1000 + 100);
+        setTimeout(
+          () => {
+            // TODO: what if has other transition (reset back to what it was)
+            element.style.transition = '';
+            element.style.transitionDelay = '';
+          },
+          (animation.delay || 0) * 1000 + animation.duration * 1000 + 100
+        );
       });
     });
   }
@@ -174,17 +181,36 @@ export class Animator {
       this.augmentAnimation(animation, element);
 
       let triggered = false;
+      let pendingAnimation = false;
       function immediateOnScroll() {
         if (!triggered && isScrolledIntoView(element)) {
           triggered = true;
+          pendingAnimation = true;
           setTimeout(() => {
             assign(element!.style, animation.steps[1].styles);
-            document.removeEventListener('scroll', onScroll);
-            setTimeout(() => {
-              element.style.transition = '';
-              element.style.transitionDelay = '';
-            }, (animation.duration * 1000 + (animation.delay || 0)) * 1000 + 100);
+            if (!animation.repeat) {
+              document.removeEventListener('scroll', onScroll);
+            }
+            setTimeout(
+              () => {
+                pendingAnimation = false;
+                if (!animation.repeat) {
+                  element.style.transition = '';
+                  element.style.transitionDelay = '';
+                }
+              },
+              (animation.duration + (animation.delay || 0)) * 1000 + 100
+            );
           });
+        } else if (
+          animation.repeat &&
+          triggered &&
+          !pendingAnimation &&
+          !isScrolledIntoView(element)
+        ) {
+          // we want to repeat the animation every time the the element is out of view and back again
+          triggered = false;
+          assign(element!.style, animation.steps[0].styles);
         }
       }
 
@@ -197,8 +223,8 @@ export class Animator {
 
         const windowHeight = window.innerHeight;
 
-        const thresholdPrecent = 0;
-        const threshold = thresholdPrecent * windowHeight;
+        const thresholdPercent = (animation.thresholdPercent || 0) / 100;
+        const threshold = thresholdPercent * windowHeight;
 
         // TODO: partial in view? or what if element is larger than screen itself
         return (

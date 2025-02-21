@@ -1,7 +1,10 @@
 export type Listener<T> = (value: T) => void;
 
 export class Subscription<FunctionType = Function> {
-  constructor(private listeners?: FunctionType[], private listener?: FunctionType) {}
+  constructor(
+    private listeners?: FunctionType[],
+    private listener?: FunctionType
+  ) {}
 
   unsubscribed = false;
 
@@ -94,6 +97,10 @@ export class BehaviorSubject<T = any, ErrorType = any> {
   promise() {
     return this.toPromise();
   }
+
+  then: Promise<T>['then'] = (...args) => {
+    return this.toPromise().then(...args);
+  };
 }
 
 // TODO: make different classes

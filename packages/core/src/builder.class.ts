@@ -2,23 +2,25 @@ import './polyfills/custom-event-polyfill';
 import { IncomingMessage, ServerResponse } from 'http';
 import { nextTick } from './functions/next-tick.function';
 import { QueryString } from './classes/query-string.class';
-import { version } from '../package.json';
 import { BehaviorSubject } from './classes/observable.class';
-import { fetch, SimplifiedFetchOptions } from './functions/fetch.function';
+import { getFetch, SimplifiedFetchOptions } from './functions/fetch.function';
 import { assign } from './functions/assign.function';
 import { throttle } from './functions/throttle.function';
 import { Animator } from './classes/animator.class';
 import { BuilderElement } from './types/element';
 import Cookies from './classes/cookies.class';
 import { omit } from './functions/omit.function';
-import { getTopLevelDomain } from './functions/get-top-level-domain';
-import serverOnlyRequire from './functions/server-only-require.function';
 import { BuilderContent } from './types/content';
 import { uuid } from './functions/uuid';
+import { parse as urlParse } from './url';
 
 // Do not change this to a require! It throws runtime errors - rollup
 // will preserve the `require` and throw runtime errors
 import hash from 'hash-sum';
+import { toError } from './functions/to-error';
+import { emptyUrl, UrlLike } from './url';
+import { DEFAULT_API_VERSION, ApiVersion } from './types/api-version';
+import { SDK_VERSION } from './sdk-version';
 
 export type Url = any;
 
@@ -57,15 +59,26 @@ function getQueryParam(url: string, variable: string): string | null {
 }
 
 const urlParser = {
-  parse(url: string) {
-    const parser = document.createElement('a') as any;
-    parser.href = url;
+  parse(url: string): UrlLike {
+    const el: HTMLAnchorElement = document.createElement('a') as any;
+    el.href = url;
     const out: any = {};
-    const props = 'username password host hostname port protocol origin pathname search hash'.split(
-      ' '
-    );
-    for (let i = props.length; i--; ) {
-      out[props[i]] = parser[props[i]];
+
+    const props = [
+      'username',
+      'password',
+      'host',
+      'hostname',
+      'port',
+      'protocol',
+      'origin',
+      'pathname',
+      'search',
+      'hash',
+    ] as const;
+
+    for (const prop of props) {
+      out[prop] = el[prop];
     }
 
     // IE 11 pathname handling workaround
@@ -82,11 +95,11 @@ const urlParser = {
   },
 };
 
-const parse = isReactNative
-  ? () => ({})
+const parse: (url: string) => UrlLike = isReactNative
+  ? () => emptyUrl()
   : typeof window === 'object'
-  ? urlParser.parse
-  : serverOnlyRequire('url').parse;
+    ? urlParser.parse
+    : urlParse;
 
 function setCookie(name: string, value: string, expires?: Date) {
   try {
@@ -104,8 +117,7 @@ function setCookie(name: string, value: string, expires?: Date) {
       (value || '') +
       expiresString +
       '; path=/' +
-      `; domain=${getTopLevelDomain(location.hostname)}` +
-      (secure ? ';secure ; SameSite=None' : '');
+      (secure ? '; secure; SameSite=None' : '');
   } catch (err) {
     console.warn('Could not set cookie', err);
   }
@@ -200,31 +212,86 @@ export interface UserAttributes {
    * URL path of the current user.
    */
   urlPath?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   queryString?: string | ParamsMap;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   device?: 'mobile' | 'tablet' | 'desktop';
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   location?: any;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   userAgent?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   referrer?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   entryMedium?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   language?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   browser?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   cookie?: string;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   newVisitor?: boolean;
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   operatingSystem?: string;
 }
 
-export interface GetContentOptions {
+type AllowEnrich =
+  | { apiVersion?: Extract<ApiVersion, 'v1'> }
+  | { apiVersion?: Extract<ApiVersion, 'v3'>; enrich?: boolean }
+  | { apiVersion?: never; enrich?: boolean };
+
+export type GetContentOptions = AllowEnrich & {
+  /**
+   * Optional fetch options to be passed as the second argument to the `fetch` function.
+   */
+  fetchOptions?: object;
+
+  /**
+   * User attribute key value pairs to be used for targeting
+   * https://www.builder.io/c/docs/custom-targeting-attributes
+   *
+   * e.g.
+   * ```js
+   * userAttributes: {
+   *   urlPath: '/',
+   *   returnVisitor: true,
+   * }
+   * ```
+   */
   userAttributes?: UserAttributes;
   /**
    * Alias for userAttributes.urlPath except it can handle a full URL (optionally with host,
@@ -236,12 +303,14 @@ export interface GetContentOptions {
    */
   includeUrl?: boolean;
   /**
-   * Follow references. If you use the `reference` field to pull in other content without this
+   * Include content of references in the response.
+   * If you use the `reference` field to pull in other content without this
    * enabled we will not fetch that content for the final response.
+   * @deprecated use `enrich` instead
    */
   includeRefs?: boolean;
   /**
-   * How long in seconds content should be cached for. Sets the max-age of the cache-control header
+   * Seconds to cache content. Sets the max-age of the cache-control header
    * response header.
    *
    * Use a higher value for better performance, lower for content that will change more frequently
@@ -265,12 +334,19 @@ export interface GetContentOptions {
    */
   limit?: number;
   /**
+   * Use to specify an offset for pagination of results. The default is 0.
+   */
+  offset?: number;
+  /**
    * Mongodb style query of your data. E.g.:
    *
-   * ```
-   * &query.data.id=abc123
-   * &query.data.myCustomField=someValue
-   * &query.data.someNumber.$ne=20
+   * ```js
+   * query: {
+   *  id: 'abc123',
+   *  data: {
+   *    myCustomField: { $gt: 20 },
+   *  }
+   * }
    * ```
    *
    * See more info on MongoDB's query operators and format.
@@ -295,10 +371,6 @@ export interface GetContentOptions {
    */
   extractCss?: boolean;
   /**
-   * Pagination results offset. Defaults to zero.
-   */
-  offset?: number;
-  /**
    * @package
    *
    * `BuilderContent` to render instead of fetching.
@@ -312,6 +384,12 @@ export interface GetContentOptions {
    * Set to `false` to not cache responses when running on the client.
    */
   cache?: boolean;
+
+  /**
+   * Set to the current locale in your application if you want localized inputs to be auto-resolved, should match one of the locales keys in your space settings
+   * Learn more about adding or removing locales [here](https://www.builder.io/c/docs/add-remove-locales)
+   */
+  locale?: string;
   /**
    * @package
    *
@@ -325,15 +403,26 @@ export interface GetContentOptions {
   /**
    * @package
    * @deprecated
+   * @hidden
    */
   alias?: string;
-  fields?: string;
   /**
-   * Omit only these fields.
+   * Only include these fields.
+   * Note: 'omit' takes precedence over 'fields'
    *
    * @example
    * ```
-   * &omit=data.bigField,data.blocks
+   * fields: 'id, name, data.customField'
+   * ```
+   */
+  fields?: string;
+  /**
+   * Omit only these fields.
+   * Note: 'omit' takes precedence over 'fields'
+   *
+   * @example
+   * ```
+   * omit: 'data.bigField,data.blocks'
    * ```
    */
   omit?: string;
@@ -344,7 +433,10 @@ export interface GetContentOptions {
    * Affects HTML generation for specific targets.
    */
   format?: 'amp' | 'email' | 'html' | 'react' | 'solid';
-  /** @deprecated */
+  /**
+   * @deprecated
+   * @hidden
+   */
   noWrap?: true;
   /**
    * @package
@@ -376,7 +468,34 @@ export interface GetContentOptions {
    * content thinking they should updates when they actually shouldn't.
    */
   noEditorUpdates?: boolean;
-}
+
+  /**
+   * If set to `true`, it will lazy load symbols/references.
+   * If set to `false`, it will render the entire content tree eagerly.
+   * @deprecated use `enrich` instead
+   */
+  noTraverse?: boolean;
+
+  /**
+   * Property to order results by.
+   * Use 1 for ascending and -1 for descending.
+   *
+   * The key is what you're sorting on, so the following example sorts by createdDate
+   * and because the value is 1, the sort is ascending.
+   *
+   * @example
+   * ```
+   * createdDate: 1
+   * ```
+   */
+  sort?: { [key: string]: 1 | -1 };
+
+  /**
+   * Include content entries in a response that are still in
+   * draft mode and un-archived. Default is false.
+   */
+  includeUnpublished?: boolean;
+};
 
 export type Class = {
   name?: string;
@@ -397,22 +516,73 @@ interface Map<K, V> {
   [Symbol.iterator](): IterableIterator<[K, V]>;
 }
 
+/**
+ * This is the interface for inputs in `Builder.registerComponent`
+ *
+ * ```js
+ * Builder.registerComponent(MyComponent, {
+ *   inputs: [{ name: 'title', type: 'text' }] // <- Input[]
+ * })
+ * ```
+ *
+ * Learn more about registering custom components [here](https://www.builder.io/c/docs/custom-react-components)
+ */
 export interface Input {
+  /** This is the name of the component prop this input represents */
   name: string;
+  /** A friendlier name to show in the UI if the component prop name is not ideal for end users */
   friendlyName?: string;
+  /** @hidden @deprecated */
   description?: string;
+  /** A default value to use */
   defaultValue?: any;
+  /**
+   * The type of input to use, such as 'text'
+   *
+   * See all available inputs [here](https://www.builder.io/c/docs/custom-components-input-types)
+   * and you can create your own custom input types and associated editor UIs with [plugins](https://www.builder.io/c/docs/extending/plugins)
+   */
   type: string;
+  /** Is this input mandatory or not */
   required?: boolean;
+  /** @hidden */
   autoFocus?: boolean;
-  subFields?: Input[];
+  subFields?: readonly Input[];
+  /**
+   * When input is of `type` `object`, use this field to collapse multiple inputs
+   * in the Visual Editor by default and preserve screen space.
+   */
+  folded?: boolean;
+  /**
+   * When input is of `type` `object`, provide guidance in the Visual Editor
+   * on how to edit this object's contents.
+   */
+  keysHelperText?: string;
+
+  /**
+   * Additional text to render in the UI to give guidance on how to use this
+   *
+   * @example
+   * ```js
+   * helperText: 'Be sure to use a proper URL, starting with "https://"'
+   * 111
+   */
   helperText?: string;
-  allowedFileTypes?: string[];
+  /** @hidden */
+  allowedFileTypes?: readonly string[];
+  /** @hidden */
   imageHeight?: number;
+  /** @hidden */
+  behavior?: string;
+  /** @hidden */
   imageWidth?: number;
+  /** @hidden */
   mediaHeight?: number;
+  /** @hidden */
   mediaWidth?: number;
+  /** @hidden */
   hideFromUI?: boolean;
+  /** @hidden */
   modelId?: string;
   /**
    * Number field type validation maximum accepted input
@@ -440,8 +610,18 @@ export interface Input {
    * to bubble up important inputs for locked groups, like text and images
    */
   bubble?: boolean;
+  /**
+   * Set this to `true` if you want this component to be translatable
+   */
+  localized?: boolean;
+  /** @hidden */
   options?: { [key: string]: any };
-  enum?: string[] | { label: string; value: any; helperText?: string }[];
+  /**
+   * For "text" input type, specifying an enum will show a dropdown of options instead
+   */
+  enum?:
+    | readonly string[]
+    | readonly { label: string; value: string | number | boolean; helperText?: string }[];
   /** Regex field validation for all string types (text, longText, html, url, etc) */
   regex?: {
     /** pattern to test, like "^\/[a-z]$" */
@@ -454,32 +634,104 @@ export interface Input {
      */
     message: string;
   };
+  /**
+   * Set this to `true` to put this under the "show more" section of
+   * the options editor. Useful for things that are more advanced
+   * or more rarely used and don't need to be too prominent
+   */
   advanced?: boolean;
-  onChange?: Function | string;
+  /** @hidden */
+  onChange?: (
+    options: any,
+    previousOptions?: any
+  ) => Promise<void> | ((options: any, previousOptions?: any) => void) | string | void | undefined;
+  /** @hidden */
   code?: boolean;
+  /** @hidden */
   richText?: boolean;
+  /** @hidden */
   showIf?: ((options: Map<string, any>) => boolean) | string;
+  /** @hidden */
   copyOnAdd?: boolean;
+  /**
+   * Use optionally with inputs of type `reference`. Restricts the content entry picker to a specific model by name.
+   */
+  model?: string;
+
+  meta?: Record<string, any>;
 }
 
+/**
+ * This is the interface for the options for `Builder.registerComponent`
+ *
+ * ```js
+ * Builder.registerComponent(YourComponent, {
+ *  // <- Component options
+ * })
+ * ```
+ *
+ * Learn more about registering custom components [here](https://www.builder.io/c/docs/custom-react-components)
+ */
 export interface Component {
   /**
    * Name your component something unique, e.g. 'MyButton'. You can override built-in components
    * by registering a component with the same name, e.g. 'Text', to replace the built-in text component
    */
   name: string;
+  /** @hidden @deprecated */
   description?: string;
   /**
    * Link to a documentation page for this component
    */
   docsLink?: string;
+  /**
+   * Link to an image to be used as an icon for this component in Builder's editor
+   *
+   * @example
+   * ```js
+   * image: 'https://some-cdn.com/my-icon-for-this-component.png'
+   * ```
+   */
   image?: string;
   /**
-   * Input schema for your component for users to fill in the options
+   * Link to a screenshot shown when user hovers over the component in Builder's editor
+   * use https://builder.io/upload to upload your screeshot, for easier resizing by Builder.
    */
-  inputs?: Input[];
+  screenshot?: string;
+
+  /**
+   * When overriding built-in components, if you don't want any special behavior that
+   * the original has, set this to `true` to skip the default behavior
+   *
+   * Default behaviors include special "virtual options", such as a custom
+   * aspect ratio editor for Images, or a special column editor for Columns
+   *
+   * Learn more about overriding built-in components here: https://www.builder.io/c/docs/custom-components-overriding
+   */
+  override?: boolean;
+
+  /**
+   * Input schema for your component for users to fill in the options via a UI
+   * that translate to this components props
+   */
+  inputs?: readonly Input[];
+  /** @hidden @deprecated */
   class?: any;
+  /** @hidden @deprecated */
   type?: 'angular' | 'webcomponent' | 'react' | 'vue';
+  /**
+   * Default styles to apply when droppged into the Builder.io editor
+   *
+   * @example
+   * ```js
+   * defaultStyles: {
+   *   // large (default) breakpoint
+   *   large: {
+   *     backgroundColor: 'black'
+   *   },
+   * }
+   * ```
+   */
   defaultStyles?: { [key: string]: string };
   /**
    * Turn on if your component can accept children. Be sure to use in combination with
@@ -487,6 +739,7 @@ export interface Component {
    * github.com/BuilderIO/builder/blob/master/examples/react-design-system/src/components/HeroWithChildren/HeroWithChildren.builder.js#L5
    */
   canHaveChildren?: boolean;
+  /** @hidden */
   fragment?: boolean;
   /**
    * Do not wrap a component in a dom element. Be sure to use {...props.attributes} with this option
@@ -496,20 +749,25 @@ export interface Component {
   /**
    * Default children
    */
-  defaultChildren?: BuilderElement[];
+  defaultChildren?: readonly BuilderElement[];
+  /**
+   * Default options to merge in when creating this block
+   */
   defaults?: Partial<BuilderElement>;
+  /** @hidden @deprecated */
   hooks?: { [key: string]: string | Function };
   /**
    * Hide your component in editor, useful for gradually deprecating components
    */
   hideFromInsertMenu?: boolean;
-  // For webcomponents
+  /** Custom tag name (for custom webcomponents only) */
   tag?: string;
+  /** @hidden @deprecated */
   static?: boolean;
   /**
    * Passing a list of model names will restrict using the component to only the models listed here, otherwise it'll be available for all models
    */
-  models?: string[];
+  models?: readonly string[];
 
   /**
    * Specify restrictions direct children must match
@@ -554,7 +812,6 @@ export interface Component {
     query?: any;
   };
 
-  /** not yet implemented */
   friendlyName?: string;
 
   /**
@@ -563,6 +820,8 @@ export interface Component {
    * for more information on permissions in builder check https://www.builder.io/c/docs/guides/roles-and-permissions
    */
   requiredPermissions?: Array<Permission>;
+
+  meta?: { [key: string]: any };
 }
 
 type Permission = 'read' | 'publish' | 'editCode' | 'editDesigns' | 'admin' | 'create';
@@ -571,8 +830,8 @@ type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends Array<infer U>
     ? Array<DeepPartial<U>>
     : T[P] extends ReadonlyArray<infer U>
-    ? ReadonlyArray<DeepPartial<U>>
-    : DeepPartial<T[P]>;
+      ? ReadonlyArray<DeepPartial<U>>
+      : DeepPartial<T[P]>;
 };
 
 export interface InsertMenuItem {
@@ -581,12 +840,35 @@ export interface InsertMenuItem {
   item: DeepPartial<BuilderElement>;
 }
 
+/**
+ * Use this to register custom sections in the Insert menu, for instance
+ * to make new sections to organize your custom components
+ *
+ * ![Example of what a custom section looks like](https://cdn.builder.io/api/v1/image/assets%2F7f7bbcf72a1a4d72bac5daa359e7befd%2Fe5f2792e9c0f44ed89a9dcb77b945858)
+ *
+ * @example
+ * ```js
+ * Builder.register('insertMenu', {
+ *   name: 'Our components',
+ *   items: [
+ *     { name: 'Hero' },
+ *     { name: 'Double Columns' },
+ *     { name: 'Triple Columns' },
+ *     { name: 'Dynamic Columns' },
+ *   ],
+ * })
+ * ```
+ *
+ * You can make as many custom sections as you like
+ *
+ * See a complete usage example [here](https://github.com/builderio/builder/blob/main/examples/react-design-system/src/builder-settings.js)
+ */
 export interface InsertMenuConfig {
   name: string;
   priority?: number;
   persist?: boolean;
   advanced?: boolean;
-  items: InsertMenuItem[];
+  items: readonly InsertMenuItem[];
 }
 
 export function BuilderComponent(info: Partial<Component> = {}) {
@@ -598,13 +880,13 @@ type Settings = any;
 
 export interface Action {
   name: string;
-  inputs?: Input[];
+  inputs?: readonly Input[];
   returnType?: Input;
   action: Function | string;
 }
 
 export class Builder {
-  static VERSION = version;
+  static VERSION = SDK_VERSION;
 
   static components: Component[] = [];
   static singletonInstance: Builder;
@@ -622,12 +904,20 @@ export class Builder {
   static throttle = throttle;
 
   static editors: any[] = [];
-  static trustedHosts: string[] = ['builder.io', 'localhost'];
+  static trustedHosts: string[] = [
+    '*.beta.builder.io',
+    'beta.builder.io',
+    'builder.io',
+    'localhost',
+    'qa.builder.io',
+  ];
+  static serverContext: any;
   static plugins: any[] = [];
 
   static actions: Action[] = [];
   static registry: { [key: string]: any[] } = {};
   static overrideHost: string | undefined;
+  static attributesCookieName = 'builder.userAttributes';
 
   /**
    * @todo `key` property on any info where if a key matches a current
@@ -636,6 +926,10 @@ export class Builder {
   static register(type: 'insertMenu', info: InsertMenuConfig): void;
   static register(type: string, info: any): void;
   static register(type: string, info: any) {
+    if (type === 'plugin') {
+      info = this.serializeIncludingFunctions(info);
+    }
+
     // TODO: all must have name and can't conflict?
     let typeList = this.registry[type];
     if (!typeList) {
@@ -696,12 +990,32 @@ export class Builder {
     this.trustedHosts.push(host);
   }
 
+  /**
+   * @param context @type {import('isolated-vm').Context}
+   * Use this function to control the execution context of custom code on the server.
+   * const ivm = require('isolated-vm');
+   * const isolate = new ivm.Isolate({ memoryLimit: 128 });
+   * const context = isolate.createContextSync();
+   * Builder.setServerContext(context);
+   */
+  static setServerContext(context: any) {
+    this.serverContext = context;
+  }
+
   static isTrustedHost(hostname: string) {
-    return (
-      this.trustedHosts.findIndex(
-        trustedHost => trustedHost === hostname || hostname.endsWith(`.${trustedHost}`)
-      ) > -1
-    );
+    const isTrusted =
+      this.trustedHosts.findIndex(trustedHost =>
+        trustedHost.startsWith('*.')
+          ? hostname.endsWith(trustedHost.slice(1))
+          : trustedHost === hostname
+      ) > -1;
+
+    return isTrusted;
+  }
+
+  static isTrustedHostForEvent(event: MessageEvent) {
+    const url = parse(event.origin);
+    return url.hostname && Builder.isTrustedHost(url.hostname);
   }
 
   static runAction(action: Action | string) {
@@ -714,7 +1028,7 @@ export class Builder {
     }
   }
 
-  static fields(name: string, fields: Input[]) {
+  static fields(name: string, fields: readonly Input[]) {
     window.parent?.postMessage(
       {
         type: 'builder.fields',
@@ -735,17 +1049,14 @@ export class Builder {
   static settings: Settings = {};
   static settingsChange = new BehaviorSubject<Settings>({});
 
-  static set(settings: Settings) {
-    if (Builder.isBrowser) {
-      // TODO: merge
-      Object.assign(this.settings, settings);
-      const message = {
-        type: 'builder.settingsChange',
-        data: this.settings,
-      };
-      parent.postMessage(message, '*');
-    }
-    this.settingsChange.next(this.settings);
+  /**
+   * @deprecated
+   * @hidden
+   *
+   * Use Builder.register('editor.settings', {}) instead.
+   */
+  static set(settings: Settings): void {
+    Builder.register('editor.settings', settings);
   }
 
   static import(packageName: string) {
@@ -795,41 +1106,41 @@ export class Builder {
     }
   }
 
+  private static serializeIncludingFunctions(info: any) {
+    const serializeFn = (fnValue: Function) => {
+      const fnStr = fnValue.toString().trim();
+
+      // we need to account for a few different fn syntaxes:
+      // 1. `function name(args) => {code}`
+      // 2. `name(args) => {code}`
+      // 3. `(args) => {}`
+      // 4. `args => {}`
+      // 5. `async function(args) {code}`
+      // 6. `async (args) => {}`
+      // 7. `async args => {}`
+      const isArrowWithoutParens = /^[a-zA-Z0-9_]+\s*=>/i.test(fnStr);
+      const appendFunction =
+        !fnStr.startsWith('function') &&
+        !fnStr.startsWith('async') &&
+        !fnStr.startsWith('(') &&
+        !isArrowWithoutParens;
+
+      return `return (${appendFunction ? 'function ' : ''}${fnStr}).apply(this, arguments)`;
+    };
+
+    return JSON.parse(
+      JSON.stringify(info, (key, value) => {
+        if (typeof value === 'function') {
+          return serializeFn(value);
+        }
+        return value;
+      })
+    );
+  }
+
   private static prepareComponentSpecToSend(spec: Component): Component {
     return {
-      ...spec,
-      ...(spec.inputs && {
-        inputs: spec.inputs.map((input: any) => {
-          // TODO: do for nexted fields too
-          // TODO: probably just convert all functions, not just
-          // TODO: put this in input hooks: { onChange: ..., showIf: ... }
-          const keysToConvertFnToString = ['onChange', 'showIf'];
-
-          for (const key of keysToConvertFnToString) {
-            if (input[key] && typeof input[key] === 'function') {
-              const fn = input[key];
-              input = {
-                ...input,
-                [key]: `return (${fn.toString()}).apply(this, arguments)`,
-              };
-            }
-          }
-
-          return input;
-        }),
-      }),
-      hooks: Object.keys(spec.hooks || {}).reduce((memo, key) => {
-        const value = spec.hooks && spec.hooks[key];
-        if (!value) {
-          return memo;
-        }
-        if (typeof value === 'string') {
-          memo[key] = value;
-        } else {
-          memo[key] = `return (${value.toString()}).apply(this, arguments)`;
-        }
-        return memo;
-      }, {} as { [key: string]: string }),
+      ...this.serializeIncludingFunctions(spec),
       class: undefined,
     };
   }
@@ -900,6 +1211,12 @@ export class Builder {
   }
 
   static isReact = false;
+  static sdkInfo = undefined as
+    | {
+        name: string;
+        version: string;
+      }
+    | undefined;
 
   static get Component() {
     return this.component;
@@ -936,11 +1253,12 @@ export class Builder {
 
     const host = this.host;
 
-    fetch(`${host}/api/v1/track`, {
+    getFetch()(`${host}/api/v1/track`, {
       method: 'POST',
       body: JSON.stringify({ events }),
       headers: {
         'content-type': 'application/json',
+        ...this.getSdkHeaders(),
       },
       mode: 'cors',
     }).catch(() => {
@@ -968,7 +1286,7 @@ export class Builder {
   private preview = false;
 
   get browserTrackingDisabled() {
-    return Boolean(Builder.isBrowser && (window as any).builderNoTrack);
+    return Builder.isBrowser && Boolean((window as any).builderNoTrack || !navigator.cookieEnabled);
   }
 
   get canTrack() {
@@ -976,12 +1294,40 @@ export class Builder {
   }
 
   set canTrack(canTrack) {
+    this.hasOverriddenCanTrack = true;
     if (this.canTrack !== canTrack) {
       this.canTrack$.next(canTrack);
     }
   }
 
+  get apiVersion() {
+    return this.apiVersion$.value;
+  }
+
+  set apiVersion(apiVersion: ApiVersion | undefined) {
+    if (this.apiVersion !== apiVersion) {
+      this.apiVersion$.next(apiVersion);
+    }
+  }
+
+  get apiEndpoint() {
+    return this.apiEndpoint$.value;
+  }
+
+  set apiEndpoint(apiEndpoint: 'content' | 'query') {
+    if (this.apiEndpoint !== apiEndpoint) {
+      this.apiEndpoint$.next(apiEndpoint);
+    }
+  }
+
+  /**
+   * Dictates which API endpoint is used when fetching content. Allows `'content'` and `'query'`.
+   * Defaults to `'query'`.
+   */
+  private apiEndpoint$ = new BehaviorSubject<'content' | 'query'>('query');
+  private apiVersion$ = new BehaviorSubject<ApiVersion | undefined>(undefined);
   private canTrack$ = new BehaviorSubject(!this.browserTrackingDisabled);
+  private hasOverriddenCanTrack = false;
   private apiKey$ = new BehaviorSubject<string | null>(null);
   private authToken$ = new BehaviorSubject<string | null>(null);
 
@@ -1130,7 +1476,15 @@ export class Builder {
 
     // Give the app a second to start up and set canTrack to false if needed
     if (Builder.isBrowser) {
-      this.setCookie(sessionStorageKey, sessionId, datePlusMinutes(30));
+      setTimeout(() => {
+        try {
+          if (this.canTrack) {
+            this.setCookie(sessionStorageKey, sessionId, datePlusMinutes(30));
+          }
+        } catch (err) {
+          console.debug('Cookie setting error', err);
+        }
+      });
     }
     return sessionId;
   }
@@ -1324,7 +1678,8 @@ export class Builder {
     protected request?: IncomingMessage,
     protected response?: ServerResponse,
     forceNewInstance = false,
-    authToken: string | null = null
+    authToken: string | null = null,
+    apiVersion?: ApiVersion
   ) {
     // TODO: use a window variable for this perhaps, e.g. bc webcomponents may be loading builder twice
     // with it's and react (use rollup build to fix)
@@ -1340,11 +1695,28 @@ export class Builder {
     if (apiKey) {
       this.apiKey = apiKey;
     }
+    if (apiVersion) {
+      this.apiVersion = apiVersion;
+    }
     if (authToken) {
       this.authToken = authToken;
     }
     if (isBrowser) {
-      this.bindMessageListeners();
+      if (Builder.isEditing) {
+        this.bindMessageListeners();
+
+        parent.postMessage(
+          {
+            type: 'builder.animatorOptions',
+            data: {
+              options: {
+                version: 2,
+              },
+            },
+          },
+          '*'
+        );
+      }
       // TODO: postmessage to parent the builder info for every package
       // type: 'builder.sdk', data: { name: '@builder.io/react', version: '0.1.23' }
       // (window as any).BUILDER_VERSION = Builder.VERSION;
@@ -1391,6 +1763,17 @@ export class Builder {
       this.setTestsFromUrl();
       // TODO: do this on every request send?
       this.getOverridesFromQueryString();
+
+      // cookies used in personalization container script, so need to set before hydration to match script result
+      const userAttrCookie = this.getCookie(Builder.attributesCookieName);
+      if (userAttrCookie) {
+        try {
+          const attributes = JSON.parse(userAttrCookie);
+          this.setUserAttributes(attributes);
+        } catch (err) {
+          console.debug('Error parsing user attributes cookie', err);
+        }
+      }
     }
   }
 
@@ -1403,14 +1786,18 @@ export class Builder {
 
   setTestsFromUrl() {
     const search = this.getLocation().search;
-    const params = QueryString.parseDeep(this.modifySearch(search || '').substr(1));
-    const tests = params.builder && params.builder.tests;
-    if (tests && typeof tests === 'object') {
-      for (const key in tests) {
-        if (tests.hasOwnProperty(key)) {
-          this.setTestCookie(key, tests[key]);
+    try {
+      const params = QueryString.parseDeep(this.modifySearch(search || '').substr(1));
+      const tests = params.builder && params.builder.tests;
+      if (tests && typeof tests === 'object') {
+        for (const key in tests) {
+          if (tests.hasOwnProperty(key)) {
+            this.setTestCookie(key, tests[key]);
+          }
         }
       }
+    } catch (e) {
+      console.debug('Error parsing tests from URL', e);
     }
   }
 
@@ -1431,57 +1818,71 @@ export class Builder {
 
   getOverridesFromQueryString() {
     const location = this.getLocation();
-    const params = QueryString.parseDeep(this.modifySearch(location.search || '').substr(1));
-    const { builder } = params;
-    if (builder) {
-      const {
-        userAttributes,
-        overrides,
-        env,
-        host,
-        api,
-        cachebust,
-        noCache,
-        preview,
-        editing,
-        frameEditing,
-        params: overrideParams,
-      } = builder;
+    try {
+      const params = QueryString.parseDeep(this.modifySearch(location.search || '').substr(1));
+      const { builder } = params;
+      if (builder) {
+        const {
+          userAttributes,
+          overrides,
+          env,
+          host,
+          api,
+          cachebust,
+          noCache,
+          preview,
+          editing,
+          frameEditing,
+          options,
+          params: overrideParams,
+        } = builder;
 
-      if (userAttributes) {
-        this.setUserAttributes(userAttributes);
-      }
+        if (userAttributes) {
+          this.setUserAttributes(userAttributes);
+        }
 
-      if (overrides) {
-        this.overrides = overrides;
-      }
+        if (options) {
+          // picking only locale, includeRefs, and enrich for now
+          this.queryOptions = {
+            ...(options.locale && { locale: options.locale }),
+            ...(options.includeRefs && { includeRefs: options.includeRefs }),
+            ...(options.enrich && { enrich: options.enrich }),
+          };
+        }
 
-      if (validEnvList.indexOf(env || api) > -1) {
-        this.env = env || api;
-      }
+        if (overrides) {
+          this.overrides = overrides;
+        }
 
-      if (Builder.isEditing) {
-        const editingModel = frameEditing || editing || preview;
-        if (editingModel && editingModel !== 'true') {
-          this.editingModel = editingModel;
+        if (validEnvList.indexOf(env || api) > -1) {
+          this.env = env || api;
+        }
+
+        if (Builder.isEditing) {
+          const editingModel = frameEditing || editing || preview;
+          if (editingModel && editingModel !== 'true') {
+            this.editingModel = editingModel;
+          }
+        }
+
+        if (cachebust) {
+          this.cachebust = true;
+        }
+
+        if (noCache) {
+          this.noCache = true;
+        }
+
+        if (preview) {
+          this.preview = true;
+        }
+
+        if (params) {
+          this.overrideParams = overrideParams;
         }
       }
-
-      if (cachebust) {
-        this.cachebust = true;
-      }
-
-      if (noCache) {
-        this.noCache = true;
-      }
-
-      if (preview) {
-        this.preview = true;
-      }
-
-      if (params) {
-        this.overrideParams = overrideParams;
-      }
+    } catch (e) {
+      console.debug('Error parsing overrides from URL', e);
     }
   }
 
@@ -1500,204 +1901,196 @@ export class Builder {
   private blockContentLoading = '';
 
   private bindMessageListeners() {
-    if (isBrowser) {
-      addEventListener('message', event => {
-        const url = parse(event.origin);
-        const isRestricted =
-          ['builder.register', 'builder.registerComponent'].indexOf(event.data?.type) === -1;
-        const isTrusted = url.hostname && Builder.isTrustedHost(url.hostname);
-        if (isRestricted && !isTrusted) {
-          return;
-        }
+    addEventListener('message', event => {
+      const isTrusted = Builder.isTrustedHostForEvent(event);
+      if (!isTrusted) return;
 
-        const { data } = event;
-        if (data) {
-          switch (data.type) {
-            case 'builder.ping': {
-              window.parent?.postMessage(
-                {
-                  type: 'builder.pong',
-                  data: {},
-                },
-                '*'
-              );
+      const { data } = event;
+      if (data) {
+        switch (data.type) {
+          case 'builder.ping': {
+            window.parent?.postMessage(
+              {
+                type: 'builder.pong',
+                data: {},
+              },
+              '*'
+            );
+            break;
+          }
+          case 'builder.register': {
+            // TODO: possibly do this for all...
+            if (event.source === window) {
               break;
             }
-            case 'builder.register': {
-              // TODO: possibly do this for all...
-              if (event.source === window) {
-                break;
-              }
-              const options = data.data;
-              if (!options) {
-                break;
-              }
-              const { type, info } = options;
-              // TODO: all must have name and can't conflict?
-              let typeList = Builder.registry[type];
-              if (!typeList) {
-                typeList = Builder.registry[type] = [];
-              }
-              typeList.push(info);
-              Builder.registryChange.next(Builder.registry);
+            const options = data.data;
+            if (!options) {
               break;
             }
-            case 'builder.settingsChange': {
-              // TODO: possibly do this for all...
-              if (event.source === window) {
-                break;
-              }
-              const settings = data.data;
-              if (!settings) {
-                break;
-              }
-              Object.assign(Builder.settings, settings);
-              Builder.settingsChange.next(Builder.settings);
+            const { type, info } = options;
+            // TODO: all must have name and can't conflict?
+            let typeList = Builder.registry[type];
+            if (!typeList) {
+              typeList = Builder.registry[type] = [];
+            }
+            typeList.push(info);
+            Builder.registryChange.next(Builder.registry);
+            break;
+          }
+          case 'builder.settingsChange': {
+            // TODO: possibly do this for all...
+            if (event.source === window) {
               break;
             }
-            case 'builder.registerEditor': {
-              // TODO: possibly do this for all...
-              if (event.source === window) {
-                break;
-              }
-              const info = data.data;
-              if (!info) {
-                break;
-              }
-              const hasComponent = !!info.component;
-              Builder.editors.every((thisInfo, index) => {
-                if (info.name === thisInfo.name) {
-                  if (thisInfo.component && !hasComponent) {
-                    return false;
-                  } else {
-                    Builder.editors[index] = thisInfo;
-                  }
+            const settings = data.data;
+            if (!settings) {
+              break;
+            }
+            Object.assign(Builder.settings, settings);
+            Builder.settingsChange.next(Builder.settings);
+            break;
+          }
+          case 'builder.registerEditor': {
+            // TODO: possibly do this for all...
+            if (event.source === window) {
+              break;
+            }
+            const info = data.data;
+            if (!info) {
+              break;
+            }
+            const hasComponent = !!info.component;
+            Builder.editors.every((thisInfo, index) => {
+              if (info.name === thisInfo.name) {
+                if (thisInfo.component && !hasComponent) {
                   return false;
+                } else {
+                  Builder.editors[index] = thisInfo;
                 }
-                return true;
-              });
-              break;
-            }
-            case 'builder.triggerAnimation': {
-              Builder.animator.triggerAnimation(data.data);
-              break;
-            }
-            case 'builder.contentUpdate':
-              const key =
-                data.data.key || data.data.alias || data.data.entry || data.data.modelName;
-              const contentData = data.data.data; // hmmm...
-              const observer = this.observersByKey[key];
-              if (observer && !this.noEditorUpdates[key]) {
-                observer.next([contentData]);
+                return false;
               }
-              break;
+              return true;
+            });
+            break;
+          }
+          case 'builder.triggerAnimation': {
+            Builder.animator.triggerAnimation(data.data);
+            break;
+          }
+          case 'builder.contentUpdate':
+            const key = data.data.key || data.data.alias || data.data.entry || data.data.modelName;
+            const contentData = data.data.data; // hmmm...
+            const observer = this.observersByKey[key];
+            if (observer && !this.noEditorUpdates[key]) {
+              observer.next([contentData]);
+            }
+            break;
 
-            case 'builder.getComponents':
+          case 'builder.getComponents':
+            window.parent?.postMessage(
+              {
+                type: 'builder.components',
+                data: Builder.components.map(item => Builder.prepareComponentSpecToSend(item)),
+              },
+              '*'
+            );
+            break;
+
+          case 'builder.editingModel':
+            this.editingModel = data.data.model;
+            break;
+
+          case 'builder.registerComponent':
+            const componentData = data.data;
+            Builder.addComponent(componentData);
+            break;
+
+          case 'builder.blockContentLoading':
+            if (typeof data.data.model === 'string') {
+              this.blockContentLoading = data.data.model;
+            }
+            break;
+
+          case 'builder.editingMode':
+            const editingMode = data.data;
+            if (editingMode) {
+              this.editingMode = true;
+              document.body.classList.add('builder-editing');
+            } else {
+              this.editingMode = false;
+              document.body.classList.remove('builder-editing');
+            }
+            break;
+
+          case 'builder.editingPageMode':
+            const editingPageMode = data.data;
+            Builder.editingPage = editingPageMode;
+            break;
+
+          case 'builder.overrideUserAttributes':
+            const userAttributes = data.data;
+            assign(Builder.overrideUserAttributes, userAttributes);
+            this.flushGetContentQueue(true);
+            // TODO: refetch too
+            break;
+
+          case 'builder.overrideTestGroup':
+            const { variationId, contentId } = data.data;
+            if (variationId && contentId) {
+              this.setTestCookie(contentId, variationId);
+              this.flushGetContentQueue(true);
+            }
+            break;
+          case 'builder.evaluate': {
+            const text = data.data.text;
+            const args = data.data.arguments || [];
+            const id = data.data.id;
+            // tslint:disable-next-line:no-function-constructor-with-string-args
+            const fn = new Function(text);
+            let result: any;
+            let error: Error | null = null;
+            try {
+              result = fn.apply(this, args);
+            } catch (err) {
+              error = toError(err);
+            }
+
+            if (error) {
               window.parent?.postMessage(
                 {
-                  type: 'builder.components',
-                  data: Builder.components.map(item => Builder.prepareComponentSpecToSend(item)),
+                  type: 'builder.evaluateError',
+                  data: { id, error: error.message },
                 },
                 '*'
               );
-              break;
-
-            case 'builder.editingModel':
-              this.editingModel = data.data.model;
-              break;
-
-            case 'builder.registerComponent':
-              const componentData = data.data;
-              Builder.addComponent(componentData);
-              break;
-
-            case 'builder.blockContentLoading':
-              if (typeof data.data.model === 'string') {
-                this.blockContentLoading = data.data.model;
-              }
-              break;
-
-            case 'builder.editingMode':
-              const editingMode = data.data;
-              if (editingMode) {
-                this.editingMode = true;
-                document.body.classList.add('builder-editing');
+            } else {
+              if (result && typeof result.then === 'function') {
+                (result as Promise<any>)
+                  .then(finalResult => {
+                    window.parent?.postMessage(
+                      {
+                        type: 'builder.evaluateResult',
+                        data: { id, result: finalResult },
+                      },
+                      '*'
+                    );
+                  })
+                  .catch(console.error);
               } else {
-                this.editingMode = false;
-                document.body.classList.remove('builder-editing');
-              }
-              break;
-
-            case 'builder.editingPageMode':
-              const editingPageMode = data.data;
-              Builder.editingPage = editingPageMode;
-              break;
-
-            case 'builder.overrideUserAttributes':
-              const userAttributes = data.data;
-              assign(Builder.overrideUserAttributes, userAttributes);
-              this.flushGetContentQueue(true);
-              // TODO: refetch too
-              break;
-
-            case 'builder.overrideTestGroup':
-              const { variationId, contentId } = data.data;
-              if (variationId && contentId) {
-                this.setTestCookie(contentId, variationId);
-                this.flushGetContentQueue(true);
-              }
-              break;
-            case 'builder.evaluate': {
-              const text = data.data.text;
-              const args = data.data.arguments || [];
-              const id = data.data.id;
-              // tslint:disable-next-line:no-function-constructor-with-string-args
-              const fn = new Function(text);
-              let result: any;
-              let error: Error | null = null;
-              try {
-                result = fn.apply(this, args);
-              } catch (err) {
-                error = err;
-              }
-
-              if (error) {
                 window.parent?.postMessage(
                   {
-                    type: 'builder.evaluateError',
-                    data: { id, error: error.message },
+                    type: 'builder.evaluateResult',
+                    data: { result, id },
                   },
                   '*'
                 );
-              } else {
-                if (result && typeof result.then === 'function') {
-                  (result as Promise<any>)
-                    .then(finalResult => {
-                      window.parent?.postMessage(
-                        {
-                          type: 'builder.evaluateResult',
-                          data: { id, result: finalResult },
-                        },
-                        '*'
-                      );
-                    })
-                    .catch(console.error);
-                } else {
-                  window.parent?.postMessage(
-                    {
-                      type: 'builder.evaluateResult',
-                      data: { result, id },
-                    },
-                    '*'
-                  );
-                }
               }
-              break;
             }
+            break;
           }
         }
-      });
-    }
+      }
+    });
   }
 
   observersByKey: { [key: string]: BehaviorSubject<BuilderContent[]> | undefined } = {};
@@ -1719,7 +2112,8 @@ export class Builder {
     canTrack = this.defaultCanTrack,
     req?: IncomingMessage,
     res?: ServerResponse,
-    authToken?: string
+    authToken?: string | null,
+    apiVersion?: ApiVersion
   ) {
     if (req) {
       this.request = req;
@@ -1727,10 +2121,15 @@ export class Builder {
     if (res) {
       this.response = res;
     }
-    this.canTrack = canTrack;
+    if (!this.hasOverriddenCanTrack) {
+      this.canTrack = canTrack;
+    }
     this.apiKey = apiKey;
     if (authToken) {
       this.authToken = authToken;
+    }
+    if (apiVersion) {
+      this.apiVersion = apiVersion;
     }
     return this;
   }
@@ -1747,7 +2146,7 @@ export class Builder {
 
     // in ssr mode
     if (this.request) {
-      parsedLocation = parse(this.request.url);
+      parsedLocation = parse(this.request.url ?? '');
     } else if (typeof location === 'object') {
       // in the browser
       parsedLocation = parse(location.href);
@@ -1804,11 +2203,17 @@ export class Builder {
   }
 
   protected overrides: { [key: string]: string } = {};
+  protected queryOptions: { [key: string]: string } = {};
+
   private getContentQueue: null | GetContentOptions[] = null;
   private priorContentQueue: null | GetContentOptions[] = null;
 
   setUserAttributes(options: object) {
     assign(Builder.overrideUserAttributes, options);
+    if (this.canTrack) {
+      this.setCookie(Builder.attributesCookieName, JSON.stringify(this.getUserAttributes()));
+    }
+
     this.userAttributesChanged.next(options);
   }
 
@@ -1835,24 +2240,48 @@ export class Builder {
     } = {}
   ) {
     let instance: Builder = this;
+    let finalLocale =
+      options.locale || options.userAttributes?.locale || this.getUserAttributes().locale;
+
+    if (!('noTraverse' in options)) {
+      options.noTraverse = false;
+    }
+
+    let finalOptions = {
+      ...options,
+      ...(finalLocale && {
+        locale: String(finalLocale),
+        userAttributes: {
+          locale: String(finalLocale),
+          ...options.userAttributes,
+        },
+      }),
+    };
     if (!Builder.isBrowser) {
       instance = new Builder(
         options.apiKey || this.apiKey,
         options.req,
         options.res,
         undefined,
-        options.authToken || this.authToken
+        options.authToken || this.authToken,
+        options.apiVersion || this.apiVersion
       );
+      instance.apiEndpoint = this.apiEndpoint;
       instance.setUserAttributes(this.getUserAttributes());
     } else {
+      // NOTE: All these are when .init is not called and the customer
+      // directly calls .get on the singleton instance of Builder
       if (options.apiKey && !this.apiKey) {
         this.apiKey = options.apiKey;
       }
       if (options.authToken && !this.authToken) {
         this.authToken = options.authToken;
       }
+      if (options.apiVersion && !this.apiVersion) {
+        this.apiVersion = options.apiVersion;
+      }
     }
-    return instance.queueGetContent(modelName, options).map(
+    return instance.queueGetContent(modelName, finalOptions).map(
       /* map( */ (matches: any[] | null) => {
         const match = matches && matches[0];
         if (Builder.isStatic) {
@@ -1964,45 +2393,14 @@ export class Builder {
     return observable;
   }
 
+  // this is needed to satisfy the Angular SDK, which used to rely on the more complex version of `requestUrl`.
+  // even though we only use `fetch()` now, we prefer to keep the old behavior and use the `fetch` that comes from
+  // the core SDK for consistency
   requestUrl(
     url: string,
-    options?: { headers: { [header: string]: number | string | string[] | undefined } }
+    options?: { headers: { [header: string]: number | string | string[] | undefined }; next?: any }
   ) {
-    if (Builder.isBrowser) {
-      return fetch(url, options as SimplifiedFetchOptions).then(res => res.json());
-    }
-    return new Promise((resolve, reject) => {
-      const parsedUrl = parse(url);
-      const module =
-        parsedUrl.protocol === 'http:' ? serverOnlyRequire('http') : serverOnlyRequire('https');
-      const requestOptions = {
-        host: parsedUrl.hostname,
-        port: parsedUrl.port,
-        path: parsedUrl.pathname + parsedUrl.search,
-        headers: { ...options?.headers },
-      };
-      module
-        .get(requestOptions, function (resp: any) {
-          let data = '';
-
-          // A chunk of data has been recieved.
-          resp.on('data', (chunk: string | Buffer) => {
-            data += chunk;
-          });
-
-          // The whole response has been received. Print out the result.
-          resp.on('end', () => {
-            try {
-              resolve(JSON.parse(data));
-            } catch (err) {
-              reject(err);
-            }
-          });
-        })
-        .on('error', (error: any) => {
-          reject(error);
-        });
-    });
+    return getFetch()(url, this.addSdkHeaders(options)).then(res => res.json());
   }
 
   get host() {
@@ -2029,11 +2427,69 @@ export class Builder {
     }
   }
 
+  private getSdkHeaders():
+    | {
+        'X-Builder-SDK': string;
+        'X-Builder-SDK-GEN': '1';
+        'X-Builder-SDK-Version': string;
+      }
+    | {} {
+    if (!Builder.sdkInfo) {
+      return {};
+    }
+
+    return {
+      'X-Builder-SDK': Builder.sdkInfo.name,
+      'X-Builder-SDK-GEN': '1',
+      'X-Builder-SDK-Version': Builder.sdkInfo.version,
+    } as const;
+  }
+
+  private addSdkHeaders(fetchOptions: any) {
+    return {
+      ...fetchOptions,
+      headers: {
+        ...fetchOptions.headers,
+        ...this.getSdkHeaders(),
+      },
+    };
+  }
+
+  private makeFetchApiCall(url: string, requestOptions: any): Promise<any> {
+    return getFetch()(url, this.addSdkHeaders(requestOptions));
+  }
+
+  private flattenMongoQuery(obj: any, _current?: any, _res: any = {}): { [key: string]: string } {
+    for (const key in obj) {
+      const value = obj[key];
+      const newKey = _current ? _current + '.' + key : key;
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        !Object.keys(value).find(item => item.startsWith('$'))
+      ) {
+        this.flattenMongoQuery(value, newKey, _res);
+      } else {
+        _res[newKey] = value;
+      }
+    }
+    return _res;
+  }
+
   private flushGetContentQueue(usePastQueue = false, useQueue?: GetContentOptions[]) {
     if (!this.apiKey) {
       throw new Error(
         `Fetching content failed, expected apiKey to be defined instead got: ${this.apiKey}`
       );
+    }
+
+    if (this.apiVersion) {
+      if (!['v1', 'v3'].includes(this.apiVersion)) {
+        throw new Error(`Invalid apiVersion: expected 'v1' or 'v3', received '${this.apiVersion}'`);
+      }
+    } else {
+      this.apiVersion = DEFAULT_API_VERSION;
     }
 
     if (!usePastQueue && !this.getContentQueue) {
@@ -2050,18 +2506,32 @@ export class Builder {
       omit: queue[0].omit || 'meta.componentsUsed',
       apiKey: this.apiKey,
       ...queue[0].options,
+      ...this.queryOptions,
     };
+
+    if (queue[0].locale) {
+      queryParams.locale = queue[0].locale;
+    }
     if (queue[0].fields) {
       queryParams.fields = queue[0].fields;
     }
     if (queue[0].format) {
       queryParams.format = queue[0].format;
     }
+    if ('noTraverse' in queue[0]) {
+      queryParams.noTraverse = queue[0].noTraverse;
+    }
+    if ('includeUnpublished' in queue[0]) {
+      queryParams.includeUnpublished = queue[0].includeUnpublished;
+    }
+    if (queue[0].sort) {
+      queryParams.sort = queue[0].sort;
+    }
 
     const pageQueryParams: ParamsMap =
-      typeof location !== 'undefined'
+      (typeof location !== 'undefined'
         ? QueryString.parseDeep(location.search.substr(1))
-        : undefined || {};
+        : undefined) || {}; // TODO: WHAT about SSR (this.request) ?
 
     const userAttributes =
       // FIXME: HACK: only checks first in queue for user attributes overrides, should check all
@@ -2069,10 +2539,10 @@ export class Builder {
       queue && queue[0].userAttributes
         ? queue[0].userAttributes
         : this.targetContent
-        ? this.getUserAttributes()
-        : {
-            urlPath: this.getLocation().pathname,
-          };
+          ? this.getUserAttributes()
+          : {
+              urlPath: this.getLocation().pathname,
+            };
 
     const fullUrlQueueItem = queue.find(item => !!item.includeUrl);
     if (fullUrlQueueItem) {
@@ -2088,7 +2558,7 @@ export class Builder {
     }
     // TODO: merge in the attribute from query string ones
     // TODO: make this an option per component/request
-    queryParams.userAttributes = userAttributes;
+    queryParams.userAttributes = JSON.stringify(userAttributes);
 
     if (!usePastQueue && !useQueue) {
       this.priorContentQueue = queue;
@@ -2121,15 +2591,11 @@ export class Builder {
       }
     }
 
-    if (!Builder.isReact) {
-      // TODO: remove me once v1 page editors converted to v2
-      // queryParams.extractCss = true;
-      queryParams.prerender = true;
-    }
-
     for (const options of queue) {
-      if (options.format) {
-        queryParams.format = options.format;
+      const format = options.format;
+
+      if (format) {
+        queryParams.format = format;
       }
       // TODO: remove me and make permodel
       if (options.static) {
@@ -2148,6 +2614,10 @@ export class Builder {
         queryParams.staleCacheSeconds = options.staleCacheSeconds;
       }
 
+      if (this.apiEndpoint === 'content') {
+        queryParams.includeRefs = true;
+      }
+
       const properties: (keyof GetContentOptions)[] = [
         'prerender',
         'extractCss',
@@ -2159,17 +2629,23 @@ export class Builder {
         'entry',
         'rev',
         'static',
+        'includeRefs',
       ];
+
       for (const key of properties) {
         const value = options[key];
         if (value !== undefined) {
-          queryParams.options = queryParams.options || {};
-          queryParams.options[options.key!] = queryParams.options[options.key!] || {};
-          queryParams.options[options.key!][key] = JSON.stringify(value);
+          if (this.apiEndpoint === 'query') {
+            queryParams.options = queryParams.options || {};
+            queryParams.options[options.key!] = queryParams.options[options.key!] || {};
+            queryParams.options[options.key!][key] = JSON.stringify(value);
+          } else {
+            queryParams[key] = JSON.stringify(value);
+          }
         }
       }
     }
-    if (this.preview) {
+    if (this.preview && this.previewingModel === queue?.[0]?.model) {
       queryParams.preview = 'true';
     }
     const hasParams = Object.keys(queryParams).length > 0;
@@ -2184,71 +2660,91 @@ export class Builder {
       assign(queryParams, params);
     }
 
+    const format = queryParams.format;
+    const isApiCallForCodegen = format === 'solid' || format === 'react';
+    const isApiCallForCodegenOrQuery = isApiCallForCodegen || this.apiEndpoint === 'query';
+
+    if (this.apiEndpoint === 'content') {
+      if (queue[0].query) {
+        const flattened = this.flattenMongoQuery({ query: queue[0].query });
+        for (const key in flattened) {
+          queryParams[key] = flattened[key];
+        }
+        delete queryParams.query;
+      }
+    }
+
     const queryStr = QueryString.stringifyDeep(queryParams);
 
-    const format = queryParams.format;
-
-    const requestOptions = { headers: {} };
+    const fetchOptions = { headers: {}, ...queue[0].fetchOptions };
     if (this.authToken) {
-      requestOptions.headers = {
-        ...requestOptions.headers,
+      fetchOptions.headers = {
+        ...fetchOptions.headers,
         Authorization: `Bearer ${this.authToken}`,
       };
     }
 
-    const promise = this.requestUrl(
-      `${host}/api/v1/${format === 'solid' || format === 'react' ? 'codegen' : 'query'}/${
-        this.apiKey
-      }/${keyNames}` + (queryParams && hasParams ? `?${queryStr}` : ''),
-      requestOptions
-    ).then(
-      result => {
-        for (const options of queue) {
-          const keyName = options.key!;
-          if (options.model === this.blockContentLoading && !options.noEditorUpdates) {
-            continue;
-          }
+    let url;
+    if (isApiCallForCodegen) {
+      url = `${host}/api/v1/codegen/${this.apiKey}/${keyNames}`;
+    } else if (this.apiEndpoint === 'query') {
+      url = `${host}/api/v3/query/${this.apiKey}/${keyNames}`;
+    } else {
+      url = `${host}/api/v3/content/${queue[0].model}`;
+    }
 
-          const isEditingThisModel = this.editingModel === options.model;
-          if (isEditingThisModel && Builder.isEditing) {
-            parent.postMessage({ type: 'builder.updateContent', data: { options } }, '*');
-            // return;
-          }
-          const observer = this.observersByKey[keyName];
-          if (!observer) {
-            return;
-          }
-          const data = result[keyName];
-          const sorted = data; // sortBy(data, item => item.priority);
-          if (data) {
-            const testModifiedResults = Builder.isServer
-              ? sorted
-              : this.processResultsForTests(sorted);
-            observer.next(testModifiedResults);
-          } else {
-            const search = this.getLocation().search;
-            if ((search || '').includes('builder.preview=' + options.model)) {
-              const previewData = {
-                id: 'preview',
-                name: 'Preview',
-                data: {},
-              };
-              observer.next([previewData]);
+    url = url + (queryParams && hasParams ? `?${queryStr}` : '');
+
+    const promise = this.makeFetchApiCall(url, fetchOptions)
+      .then(res => res.json())
+      .then(
+        result => {
+          for (const options of queue) {
+            const keyName = options.key!;
+            if (options.model === this.blockContentLoading && !options.noEditorUpdates) {
+              continue;
             }
-            observer.next([]);
+
+            const isEditingThisModel = this.editingModel === options.model;
+            if (isEditingThisModel && Builder.isEditing) {
+              parent.postMessage({ type: 'builder.updateContent', data: { options } }, '*');
+              // return;
+            }
+            const observer = this.observersByKey[keyName];
+            if (!observer) {
+              return;
+            }
+            const data = isApiCallForCodegenOrQuery ? result[keyName] : result.results;
+            const sorted = data; // sortBy(data, item => item.priority);
+            if (data) {
+              const testModifiedResults = Builder.isServer
+                ? sorted
+                : this.processResultsForTests(sorted);
+              observer.next(testModifiedResults);
+            } else {
+              const search = this.getLocation().search;
+              if ((search || '').includes('builder.preview=' + options.model)) {
+                const previewData = {
+                  id: 'preview',
+                  name: 'Preview',
+                  data: {},
+                };
+                observer.next([previewData]);
+              }
+              observer.next([]);
+            }
+          }
+        },
+        err => {
+          for (const options of queue) {
+            const observer = this.observersByKey[options.key!];
+            if (!observer) {
+              return;
+            }
+            observer.error(err);
           }
         }
-      },
-      err => {
-        for (const options of queue) {
-          const observer = this.observersByKey[options.key!];
-          if (!observer) {
-            return;
-          }
-          observer.error(err);
-        }
-      }
-    );
+      );
 
     return promise;
   }
@@ -2366,16 +2862,37 @@ export class Builder {
       req?: IncomingMessage;
       res?: ServerResponse;
       apiKey?: string;
+      authToken?: string;
     } = {}
   ): Promise<BuilderContent[]> {
     let instance: Builder = this;
     if (!Builder.isBrowser) {
-      instance = new Builder(options.apiKey || this.apiKey, options.req, options.res);
+      instance = new Builder(
+        options.apiKey || this.apiKey,
+        options.req,
+        options.res,
+        false,
+        options.authToken || this.authToken,
+        options.apiVersion || this.apiVersion
+      );
       instance.setUserAttributes(this.getUserAttributes());
     } else {
+      // NOTE: All these are when .init is not called and the customer
+      // directly calls .get on the singleton instance of Builder
       if (options.apiKey && !this.apiKey) {
         this.apiKey = options.apiKey;
       }
+      if (options.authToken && !this.authToken) {
+        this.authToken = options.authToken;
+      }
+      if (options.apiVersion && !this.apiVersion) {
+        this.apiVersion = options.apiVersion;
+      }
+    }
+
+    // Set noTraverse=true if NOT already passed by user, for query performance
+    if (!('noTraverse' in options)) {
+      options.noTraverse = true;
     }
 
     return instance
@@ -2384,7 +2901,7 @@ export class Builder {
         ...options,
         key:
           options.key ||
-          // Make the key include all options so we don't reuse cache for the same conent fetched
+          // Make the key include all options, so we don't reuse cache for the same content fetched
           // with different options
           Builder.isBrowser
             ? `${modelName}:${hash(omit(options, 'initialContent', 'req', 'res'))}`

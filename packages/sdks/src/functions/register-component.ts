@@ -1,51 +1,39 @@
-import { isBrowser } from './is-browser';
+import type { ComponentInfo } from '../types/components.js';
 
-// TODO
-export type ComponentInfo = any;
+export const createRegisterComponentMessage = (info: ComponentInfo) => ({
+  type: 'builder.registerComponent',
+  data: serializeIncludingFunctions(info),
+});
 
-export const components: Record<string, any> = {};
+// eslint-disable-next-line @typescript-eslint/ban-types
+const serializeFn = (fnValue: Function) => {
+  const fnStr = fnValue.toString().trim();
 
-// Compile only facade
-export function registerComponent(info: ComponentInfo): void;
-export function registerComponent(component: any, info?: ComponentInfo): void {
-  components[info.name] = { component, info };
+  // we need to account for a few different fn syntaxes:
+  // 1. `function name(args) => {code}`
+  // 2. `name(args) => {code}`
+  // 3. `(args) => {}`
+  // 4. `args => {}`
+  // 5. `async function(args) {code}`
+  // 6. `async (args) => {}`
+  // 7. `async args => {}`
+  const isArrowWithoutParens = /^[a-zA-Z0-9_]+\s*=>/i.test(fnStr);
+  const appendFunction =
+    !fnStr.startsWith('function') &&
+    !fnStr.startsWith('async') &&
+    !fnStr.startsWith('(') &&
+    !isArrowWithoutParens;
 
-  if (isBrowser()) {
-    const sendInfo = prepareComponentInfoToSend(info);
-    window.parent?.postMessage(
-      {
-        type: 'builder.registerComponent',
-        data: sendInfo,
-      },
-      '*'
-    );
-  }
+  return `return (${appendFunction ? 'function ' : ''}${fnStr}).apply(this, arguments)`;
+};
 
-  return component;
-}
-
-function prepareComponentInfoToSend(info: ComponentInfo) {
-  return {
-    ...info,
-    ...(info.inputs && {
-      inputs: info.inputs.map((input: any) => {
-        // TODO: do for nexted fields too
-        // TODO: probably just convert all functions, not just
-        // TODO: put this in input hooks: { onChange: ..., showIf: ... }
-        const keysToConvertFnToString = ['onChange', 'showIf'];
-
-        for (const key of keysToConvertFnToString) {
-          if (input[key] && typeof input[key] === 'function') {
-            const fn = input[key];
-            input = {
-              ...input,
-              [key]: `return (${fn.toString()}).apply(this, arguments)`,
-            };
-          }
-        }
-
-        return input;
-      }),
-    }),
-  };
+export function serializeIncludingFunctions(info: ComponentInfo) {
+  return JSON.parse(
+    JSON.stringify(info, (key, value) => {
+      if (typeof value === 'function') {
+        return serializeFn(value);
+      }
+      return value;
+    })
+  );
 }

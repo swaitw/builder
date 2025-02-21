@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-import { NotFound } from '../components/NotFound';
-import { BuilderComponent, BuilderContent, Builder } from '@builder.io/react';
-import { CircularProgress } from '@material-ui/core';
+import { BuilderContent } from '@builder.io/react';
 import { ProductsList } from '../components/ProductsList/ProductsList';
 import styled from 'styled-components';
 
@@ -320,7 +318,7 @@ const Div12 = styled.div`
 
 const Div13 = styled.div`
   display: flex;
-  @media (max-width: 999px) {
+  @media (max-width: 991px) {
     flex-direction: column;
     align-items: stretch;
   }
@@ -332,7 +330,7 @@ const Div14 = styled.div`
   line-height: normal;
   width: calc(33.333333333333336% - 13.333333333333334px);
   margin-left: 0px;
-  @media (max-width: 999px) {
+  @media (max-width: 991px) {
     width: 100%;
   }
 `;
@@ -406,7 +404,7 @@ const Div19 = styled.div`
   line-height: normal;
   width: calc(33.333333333333336% - 13.333333333333334px);
   margin-left: 20px;
-  @media (max-width: 999px) {
+  @media (max-width: 991px) {
     width: 100%;
   }
 `;
@@ -480,7 +478,7 @@ const Div24 = styled.div`
   line-height: normal;
   width: calc(33.333333333333336% - 13.333333333333334px);
   margin-left: 20px;
-  @media (max-width: 999px) {
+  @media (max-width: 991px) {
     width: 100%;
   }
 `;
@@ -555,9 +553,7 @@ const ProductsList1 = styled(ProductsList)`
   margin-top: 20px;
 `;
 
-export function HomepageFullHeadless(props) {
-  const [notFound, setNotFound] = useState(false);
-
+export function HomepageFullHeadless() {
   return (
     <>
       <BuilderContent modelName="homepage-headless-content">

@@ -1,4 +1,5 @@
-import React from 'react';
+'use client';
+import React, { PropsWithChildren } from 'react';
 import ReactDOM from 'react-dom';
 import { jsx, css } from '@emotion/core';
 import { BuilderContent, getContentWithInfo } from './builder-content.component';
@@ -11,6 +12,7 @@ import {
   BehaviorSubject,
   BuilderElement,
   BuilderContent as Content,
+  Component,
 } from '@builder.io/sdk';
 import { BuilderStoreContext } from '../store/builder-store';
 import hash from 'hash-sum';
@@ -18,7 +20,7 @@ import onChange from '../../lib/on-change';
 
 export { onChange };
 
-import { sizes } from '../constants/device-sizes.constant';
+import { Breakpoints, getSizesForBreakpoints, Sizes } from '../constants/device-sizes.constant';
 import {
   BuilderAsyncRequestsContext,
   RequestOrPromise,
@@ -28,8 +30,15 @@ import {
 import { Url } from 'url';
 import { debounceNextTick } from '../functions/debonce-next-tick';
 import { throttle } from '../functions/throttle';
-import { safeDynamicRequire } from '../functions/safe-dynamic-require';
 import { BuilderMetaContext } from '../store/builder-meta';
+import { tryEval } from '../functions/try-eval';
+import { toError } from '../to-error';
+import { getBuilderPixel } from '../functions/get-builder-pixel';
+import { isDebug } from '../functions/is-debug';
+
+export type RegisteredComponent = Component & {
+  component?: React.ComponentType<any>;
+};
 
 function pick<T, K extends keyof T>(obj: T, ...keys: K[]): Pick<T, K> {
   const ret: any = {};
@@ -45,6 +54,8 @@ function omit<T, K extends keyof T>(obj: T, ...keys: K[]): Omit<T, K> {
   });
   return ret;
 }
+
+const instancesMap = new Map<string, Builder>();
 
 const wrapComponent = (info: any) => {
   return (props: any) => {
@@ -87,41 +98,16 @@ function debounce(func: Function, wait: number, immediate = false) {
 
 const fontsLoaded = new Set();
 
-// TODO: get fetch from core JS....
-const fetch = Builder.isBrowser ? window.fetch : require('node-fetch');
+let fetch: (typeof globalThis)['fetch'];
+if (globalThis.fetch) fetch = globalThis.fetch;
+fetch ??= require('node-fetch');
 
 const sizeMap = {
   desktop: 'large',
   tablet: 'medium',
   mobile: 'small',
+  xsmall: 'xsmall',
 };
-
-function decorator(fn: Function) {
-  return function argReceiver(...fnArgs: any[]) {
-    // Check if the decorator is being called without arguments (ex `@foo methodName() {}`)
-    if (fnArgs.length === 3) {
-      const [target, key, descriptor] = fnArgs;
-      if (descriptor && (descriptor.value || descriptor.get)) {
-        fnArgs = [];
-        return descriptorChecker(target, key, descriptor);
-      }
-    }
-
-    return descriptorChecker;
-
-    // descriptorChecker determines whether a method or getter is being decorated
-    // and replaces the appropriate key with the decorated function.
-    function descriptorChecker(target: any, key: any, descriptor: any) {
-      const descriptorKey = descriptor.value ? 'value' : 'get';
-      return {
-        ...descriptor,
-        [descriptorKey]: fn(descriptor[descriptorKey], ...fnArgs),
-      };
-    }
-  };
-}
-
-const Throttle = decorator(throttle);
 
 const fetchCache: { [key: string]: any } = {};
 
@@ -129,6 +115,7 @@ export interface BuilderComponentProps {
   /**
    * @package
    * @deprecated use {@link model} instead.
+   * @hidden
    */
   modelName?: string;
   /**
@@ -138,6 +125,7 @@ export interface BuilderComponentProps {
   /**
    * @package
    * @deprecated use {@link model} instead.
+   * @hidden
    */
   name?: string;
   /**
@@ -176,6 +164,7 @@ export interface BuilderComponentProps {
   apiKey?: string;
   /**
    * @private
+   * @hidden
    */
   codegen?: boolean;
   options?: GetContentOptions;
@@ -211,6 +200,7 @@ export interface BuilderComponentProps {
   content?: Content;
   /**
    * @package
+   * @hidden
    *
    * Location object that provides the current url, path, etc; for server side
    * rendering.
@@ -224,10 +214,12 @@ export interface BuilderComponentProps {
   /**
    * @package
    * @deprecated
+   * @hidden
    */
   noAsync?: boolean;
   /**
    * @package
+   * @hidden
    *
    * Flag to render email content (small differences in our render logic for
    * email support).
@@ -235,6 +227,7 @@ export interface BuilderComponentProps {
   emailMode?: boolean;
   /**
    * @package
+   * @hidden
    *
    * Flag to render amp content (small differences in our render logic for amp
    * support)
@@ -242,6 +235,7 @@ export interface BuilderComponentProps {
   ampMode?: boolean;
   /**
    * @package
+   * @hidden
    *
    * Render content in-line only (can't passed from the content prop) don't
    * fetch content from our API.
@@ -250,21 +244,25 @@ export interface BuilderComponentProps {
   /**
    * @package
    * @deprecated
+   * @hidden
    */
   builderBlock?: BuilderElement;
   /**
    * @package
    * @deprecated
+   * @hidden
    */
   dataOnly?: boolean;
   /**
    * @package
    * @deprecated
+   * @hidden
    */
   hydrate?: boolean;
   /**
    * @package
    * @deprecated use {@link Builder.isStatic} instead
+   * @hidden
    */
   isStatic?: boolean;
   /**
@@ -275,9 +273,11 @@ export interface BuilderComponentProps {
   context?: any;
   /**
    * @deprecated
+   * @hidden
    */
   url?: string;
   /**
+   * @hidden
    * Set to true if this is not the root content component, for instance for symbols
    */
   isChild?: boolean;
@@ -287,6 +287,17 @@ export interface BuilderComponentProps {
    * navigation to other pages unintended
    */
   stopClickPropagationWhenEditing?: boolean;
+
+  /**
+   * Set to the current locale in your application if you want localized inputs to be auto-resolved, should match one of the locales keys in your space settings
+   * Learn more about adding or removing locales [here](https://www.builder.io/c/docs/add-remove-locales)
+   */
+  locale?: string;
+
+  /**
+   * Pass a list of custom components to register with Builder.io.
+   */
+  customComponents?: Array<RegisteredComponent>;
 }
 
 export interface BuilderComponentState {
@@ -295,85 +306,8 @@ export interface BuilderComponentState {
   updates: number;
   context: any;
   key: number;
+  breakpoints?: Breakpoints;
 }
-
-const tryEval = (str?: string, data: any = {}, errors?: Error[]): any => {
-  const value = str;
-  if (!(typeof value === 'string' && value.trim())) {
-    return;
-  }
-  const useReturn = !(value.includes(';') || value.includes(' return '));
-  let fn: Function = () => {
-    /* Intentionally empty */
-  };
-  try {
-    if (Builder.isBrowser) {
-      // tslint:disable-next-line:no-function-constructor-with-string-args
-      // TODO: VM in node......
-      fn = new Function(
-        'state',
-        // TODO: remove the with () {} - make a page v3 that doesn't use this
-        `var rootState = state;
-        if (typeof Proxy !== 'undefined') {
-          rootState = new Proxy(rootState, {
-            set: function () {
-              return false;
-            },
-            get: function (target, key) {
-              if (key === 'state') {
-                return state;
-              }
-              return target[key]
-            }
-          });
-        }
-        with (rootState) {
-          ${useReturn ? `return (${str});` : str};
-        }`
-      );
-    }
-  } catch (error) {
-    if (Builder.isBrowser) {
-      console.warn('Could not compile javascript', error);
-    } else {
-      // Add to req.options.errors to return to client
-    }
-  }
-  try {
-    if (Builder.isBrowser) {
-      return fn(data || {});
-    } else {
-      // Below is a hack to get certain code to *only* load in the server build, to not screw with
-      // browser bundler's like rollup and webpack. Our rollup plugin strips these comments only
-      // for the server build
-      // tslint:disable:comment-format
-      const { VM } = safeDynamicRequire('vm2');
-      return new VM({
-        sandbox: {
-          ...data,
-          ...{ state: data },
-        },
-        // TODO: convert reutrn to module.exports on server
-      }).run(value.replace(/(^|;)return /, '$1'));
-      // tslint:enable:comment-format
-    }
-  } catch (error) {
-    if (errors) {
-      errors.push(error);
-    }
-
-    if (Builder.isBrowser) {
-      console.warn('Builder custom code error:', error.message, 'in', str, error.stack);
-    } else {
-      if (process.env.DEBUG) {
-        console.debug('Builder custom code error:', error.message, 'in', str, error.stack);
-      }
-      // Add to req.options.errors to return to client
-    }
-  }
-
-  return;
-};
 
 function searchToObject(location: Location | Url) {
   const pairs = (location.search || '').substring(1).split('&');
@@ -403,7 +337,7 @@ function searchToObject(location: Location | Url) {
  * `props.content`.
  */
 export class BuilderComponent extends React.Component<
-  BuilderComponentProps,
+  PropsWithChildren<BuilderComponentProps>,
   BuilderComponentState
 > {
   static defaults: Pick<BuilderComponentProps, 'codegen'> = {
@@ -424,7 +358,7 @@ export class BuilderComponent extends React.Component<
   lastJsCode = '';
   lastHttpRequests: { [key: string]: string | undefined } = {};
   httpSubscriptionPerKey: { [key: string]: Subscription | undefined } = {};
-
+  firstLoad = true;
   ref: HTMLElement | null = null;
 
   Component: any;
@@ -444,6 +378,7 @@ export class BuilderComponent extends React.Component<
   private _asyncRequests?: RequestOrPromise[];
   private _errors?: Error[];
   private _logs?: string[];
+  private sizes: Sizes;
 
   get element() {
     return this.ref;
@@ -459,14 +394,38 @@ export class BuilderComponent extends React.Component<
   constructor(props: BuilderComponentProps) {
     super(props);
 
+    let _content: any = this.inlinedContent;
+    if (_content && _content.content) {
+      _content = _content.content;
+    }
+
+    this.sizes = getSizesForBreakpoints(_content?.meta?.breakpoints || {});
+
     // TODO: pass this all the way down - symbols, etc
     // this.asServer = Boolean(props.hydrate && Builder.isBrowser)
-
+    const contentData = this.inlinedContent?.data;
+    if (contentData && Array.isArray(contentData.inputs) && contentData.inputs.length > 0) {
+      if (!contentData.state) {
+        contentData.state = {};
+      }
+      // set default values of content inputs on state
+      contentData.inputs.forEach((input: any) => {
+        if (input) {
+          if (
+            input.name &&
+            input.defaultValue !== undefined &&
+            contentData.state![input.name] === undefined
+          ) {
+            contentData.state![input.name] = input.defaultValue;
+          }
+        }
+      });
+    }
     this.state = {
       // TODO: should change if this prop changes
       context: {
         ...props.context,
-        apiKey: builder.apiKey || this.props.apiKey,
+        apiKey: this.props.apiKey || builder.apiKey,
       },
       state: Object.assign(this.rootState, {
         ...(this.inlinedContent && this.inlinedContent.data && this.inlinedContent.data.state),
@@ -485,22 +444,25 @@ export class BuilderComponent extends React.Component<
       update: this.updateState,
     };
 
-    if (Builder.isBrowser) {
-      const key = this.props.apiKey;
-      if (key && key !== this.builder.apiKey) {
-        this.builder.apiKey = key;
-      }
-
-      if (this.inlinedContent) {
-        // Sometimes with graphql we get the content as `content.content`
-        const content = (this.inlinedContent as any).content || this.inlinedContent;
-        this.onContentLoaded(content?.data, getContentWithInfo(content)!);
-      }
+    const key = this.props.apiKey;
+    if (key && key !== this.builder.apiKey && !instancesMap.has(key)) {
+      // We create a builder instance for each api key to support loading of symbols from other spaces
+      const instance = new Builder(key, undefined, undefined, true);
+      instancesMap.set(key, instance);
     }
+
+    if (this.inlinedContent) {
+      // Sometimes with graphql we get the content as `content.content`
+      const content = (this.inlinedContent as any).content || this.inlinedContent;
+      this.onContentLoaded(content?.data, getContentWithInfo(content)!);
+    }
+
+    this.registerCustomComponents();
   }
 
   get builder() {
-    return this.props.builder || builder;
+    const instance = this.props.apiKey && instancesMap.get(this.props.apiKey);
+    return instance || this.props.builder || builder;
   }
 
   getHtmlData() {
@@ -544,13 +506,38 @@ export class BuilderComponent extends React.Component<
   get deviceSizeState() {
     // TODO: use context to pass this down on server
     return Builder.isBrowser
-      ? sizes.getSizeForWidth(window.innerWidth)
+      ? this.sizes.getSizeForWidth(window.innerWidth)
       : sizeMap[this.device] || 'large';
   }
 
   messageListener = (event: MessageEvent) => {
+    const isTrusted = Builder.isTrustedHostForEvent(event);
+    if (!isTrusted) return;
+
     const info = event.data;
     switch (info.type) {
+      case 'builder.configureSdk': {
+        const data = info.data;
+
+        if (!data.contentId || data.contentId !== this.useContent?.id) {
+          return;
+        }
+
+        this.sizes = getSizesForBreakpoints(data.breakpoints || {});
+
+        this.setState({
+          state: Object.assign(this.rootState, {
+            deviceSize: this.deviceSizeState,
+            // TODO: will user attributes be ready here?
+            device: this.device,
+          }),
+          updates: ((this.state && this.state.updates) || 0) + 1,
+          breakpoints: data.breakpoints,
+        });
+
+        break;
+      }
+
       case 'builder.updateSpacer': {
         const data = info.data;
         const currentSpacer = this.rootState._spacer;
@@ -724,6 +711,17 @@ export class BuilderComponent extends React.Component<
 
   mounted = false;
 
+  registerCustomComponents() {
+    if (this.props.customComponents) {
+      for (const customComponent of this.props.customComponents) {
+        if (customComponent) {
+          const { component, ...registration } = customComponent;
+          Builder.registerComponent(component, registration);
+        }
+      }
+    }
+  }
+
   componentDidMount() {
     this.mounted = true;
     if (this.asServer) {
@@ -736,7 +734,10 @@ export class BuilderComponent extends React.Component<
 
     if (Builder.isIframe) {
       window.parent?.postMessage(
-        { type: 'builder.sdkInjected', data: { modelName: this.name } },
+        {
+          type: 'builder.sdkInjected',
+          data: { modelName: this.name, apiKey: this.props.apiKey || builder.apiKey },
+        },
         '*'
       );
     }
@@ -746,6 +747,13 @@ export class BuilderComponent extends React.Component<
       window.addEventListener('resize', this.resizeListener);
       if (Builder.isEditing) {
         window.addEventListener('message', this.messageListener);
+      }
+
+      if (Builder.isEditing || Builder.isPreviewing) {
+        Builder.nextTick(() => {
+          this.firstLoad = false;
+          this.reload();
+        });
       }
 
       setTimeout(() => {
@@ -785,8 +793,8 @@ export class BuilderComponent extends React.Component<
 
   get isPreviewing() {
     return (
-      (Builder.isServer || (Builder.isBrowser && Builder.isPreviewing)) &&
-      builder.previewingModel === this.name
+      (Builder.isServer || (Builder.isBrowser && Builder.isPreviewing && !this.firstLoad)) &&
+      (builder.previewingModel === this.name || builder.previewingModel === 'BUILDER_STUDIO')
     );
   }
 
@@ -922,7 +930,7 @@ export class BuilderComponent extends React.Component<
   get data() {
     const data = {
       ...(this.inlinedContent && this.inlinedContent.data?.state),
-      ...this.props.data,
+      ...this.externalState,
       ...this.state.state,
     };
     Object.assign(this.rootState, data);
@@ -933,8 +941,12 @@ export class BuilderComponent extends React.Component<
     // TODO: shallow diff
     if (this.props.data && prevProps.data !== this.props.data) {
       this.state.update((state: any) => {
-        Object.assign(state, this.props.data);
+        Object.assign(state, this.externalState);
       });
+    }
+
+    if (this.props.customComponents && this.props.customComponents !== prevProps.customComponents) {
+      this.registerCustomComponents();
     }
 
     if (Builder.isEditing) {
@@ -973,6 +985,13 @@ export class BuilderComponent extends React.Component<
     return content;
   }
 
+  get externalState() {
+    return {
+      ...this.props.data,
+      ...(this.props.locale ? { locale: this.props.locale } : {}),
+    };
+  }
+
   get useContent() {
     return this.content || this.state.context.builderContent;
   }
@@ -981,7 +1000,10 @@ export class BuilderComponent extends React.Component<
     const content = this.content;
 
     const dataString =
-      Builder.isBrowser && this.props.data && size(this.props.data) && hash(this.props.data);
+      Builder.isBrowser &&
+      this.externalState &&
+      size(this.externalState) &&
+      hash(this.externalState);
     let key = Builder.isEditing ? this.name : this.props.entry;
     if (key && !Builder.isEditing && dataString && dataString.length < 300) {
       key += ':' + dataString;
@@ -1052,6 +1074,7 @@ export class BuilderComponent extends React.Component<
                           !this.isPreviewing && { initialContent: [] }),
                         ...(this.props.url && { url: this.props.url }),
                         ...this.props.options,
+                        ...(this.props.locale ? { locale: this.props.locale } : {}),
                         ...(this.options.codegen && {
                           format: 'react',
                         }),
@@ -1066,8 +1089,11 @@ export class BuilderComponent extends React.Component<
                         if (this.props.dataOnly) {
                           return null;
                         }
-
                         if (fullData && fullData.id) {
+                          if (this.state.breakpoints) {
+                            fullData.meta = fullData.meta || {};
+                            fullData.meta.breakpoints = this.state.breakpoints;
+                          }
                           this.state.context.builderContent = fullData;
                         }
                         if (Builder.isBrowser) {
@@ -1127,15 +1153,28 @@ export class BuilderComponent extends React.Component<
                           );
                         }
 
+                        const blocks = data?.blocks || [];
+
+                        const hasPixel = blocks.find((block: BuilderElement) =>
+                          block.id?.startsWith('builder-pixel')
+                        );
+
+                        if (data && !hasPixel && blocks.length > 0) {
+                          blocks.push(getBuilderPixel(builder.apiKey!));
+                        }
+
                         // TODO: loading option - maybe that is what the children is or component prop
                         // TODO: get rid of all these wrapper divs
                         return data ? (
                           <div
                             data-builder-component={this.name}
                             data-builder-content-id={fullData.id}
-                            data-builder-variation-id={
-                              fullData.testVariationId || fullData.variationId || fullData.id
-                            }
+                            {...(this.isPreviewing
+                              ? {
+                                  'data-builder-variation-id':
+                                    fullData.testVariationId || fullData.variationId || fullData.id,
+                                }
+                              : {})}
                           >
                             {!codegen && this.getCss(data) && (
                               <style
@@ -1162,7 +1201,7 @@ export class BuilderComponent extends React.Component<
                                   key={String(!!data?.blocks?.length)}
                                   emailMode={this.props.emailMode}
                                   fieldName="blocks"
-                                  blocks={data.blocks}
+                                  blocks={blocks}
                                 />
                               )}
                             </BuilderStoreContext.Provider>
@@ -1188,13 +1227,9 @@ export class BuilderComponent extends React.Component<
 
   evalExpression(expression: string) {
     const { data } = this;
-    return expression.replace(/{{([^}]+)}}/g, (match, group) => tryEval(group, data, this._errors));
-  }
-
-  // TODO: customizable hm
-  @Throttle(100, { leading: true, trailing: true })
-  throttledHandleRequest(propertyName: string, url: string) {
-    return this.handleRequest(propertyName, url);
+    return String(expression).replace(/{{([^}]+)}}/g, (match, group) =>
+      tryEval(group, data, this._errors)
+    );
   }
 
   async handleRequest(propertyName: string, url: string) {
@@ -1215,8 +1250,9 @@ export class BuilderComponent extends React.Component<
         const result = await fetch(url);
         json = await result.json();
       } catch (err) {
+        const error = toError(err);
         if (this._errors) {
-          this._errors.push(err);
+          this._errors.push(error);
         }
         if (this._logs) {
           this._logs.push(`Fetch to ${url} errored in ${Date.now() - requestStart}ms`);
@@ -1324,7 +1360,6 @@ export class BuilderComponent extends React.Component<
       this.notifyStateChange();
     }
 
-    // Unsubscribe all? TODO: maybe don't continuous fire when editing.....
     if (this.props.contentLoaded) {
       this.props.contentLoaded(data, content);
     }
@@ -1334,12 +1369,6 @@ export class BuilderComponent extends React.Component<
         data.state = {};
       }
 
-      // Maybe...
-      // if (data.context) {
-      //   Object.assign(this.state.context, data.context)
-      // }
-      // TODO: may not want this... or make sure anything overriden
-      // explitily sets to null
       data.inputs.forEach((input: any) => {
         if (input) {
           if (
@@ -1360,10 +1389,10 @@ export class BuilderComponent extends React.Component<
         state: Object.assign(this.rootState, {
           ...this.state.state,
           location: this.locationState,
-          deviceSize: this.deviceSizeState,
           device: this.device,
           ...data.state,
-          ...this.props.data,
+          ...this.externalState,
+          deviceSize: this.deviceSizeState,
         }),
       };
       if (this.mounted) {
@@ -1374,7 +1403,7 @@ export class BuilderComponent extends React.Component<
     }
 
     // TODO: also throttle on edits maybe
-    if (data && data.jsCode && Builder.isBrowser && !this.options.codegen) {
+    if (data && data.jsCode && !this.options.codegen) {
       // Don't rerun js code when editing and not changed
       let skip = false;
       if (Builder.isEditing) {
@@ -1404,7 +1433,8 @@ export class BuilderComponent extends React.Component<
 
           // TODO: allow exports = { } syntax?
           // TODO: do something with reuslt like view - methods, computed, actions, properties, template, etc etc
-        } catch (error) {
+        } catch (err) {
+          const error = toError(err);
           if (Builder.isBrowser) {
             console.warn(
               'Builder custom code error:',
@@ -1414,7 +1444,7 @@ export class BuilderComponent extends React.Component<
               error.stack
             );
           } else {
-            if (process.env.DEBUG) {
+            if (isDebug()) {
               console.debug(
                 'Builder custom code error:',
                 error.message,
@@ -1439,8 +1469,6 @@ export class BuilderComponent extends React.Component<
         for (const key in data.httpRequests) {
           const url: string | undefined = data.httpRequests[key];
           if (url && (!this.data[key] || Builder.isEditing)) {
-            // TODO: if Builder.isEditing and url patches https://builder.io/api/v2/content/{editingModel}
-            // Then use this.builder.get().subscribe(...)
             if (Builder.isBrowser) {
               const finalUrl = this.evalExpression(url);
               if (Builder.isEditing && this.lastHttpRequests[key] === finalUrl) {
@@ -1450,48 +1478,27 @@ export class BuilderComponent extends React.Component<
               const builderModelRe = /builder\.io\/api\/v2\/([^\/\?]+)/i;
               const builderModelMatch = url.match(builderModelRe);
               const model = builderModelMatch && builderModelMatch[1];
-              if (false && Builder.isEditing && model && this.builder.editingModel === model) {
-                this.throttledHandleRequest(key, finalUrl);
-                // TODO: fix this
-                // this.subscriptions.add(
-                //   this.builder.get(model).subscribe(data => {
-                //     this.state.update((state: any) => {
-                //       state[key] = data
-                //     })
-                //   })
-                // )
-              } else {
-                this.throttledHandleRequest(key, finalUrl);
-                const currentSubscription = this.httpSubscriptionPerKey[key];
-                if (currentSubscription) {
-                  currentSubscription.unsubscribe();
-                }
+              this.handleRequest(key, finalUrl);
+              const currentSubscription = this.httpSubscriptionPerKey[key];
+              if (currentSubscription) {
+                currentSubscription.unsubscribe();
+              }
 
-                // TODO: fix this
-                const newSubscription = (this.httpSubscriptionPerKey[
-                  key
-                ] = this.onStateChange.subscribe(() => {
+              // TODO: fix this
+              const newSubscription = (this.httpSubscriptionPerKey[key] =
+                this.onStateChange.subscribe(() => {
                   const newUrl = this.evalExpression(url);
                   if (newUrl !== finalUrl) {
-                    this.throttledHandleRequest(key, newUrl);
+                    this.handleRequest(key, newUrl);
                     this.lastHttpRequests[key] = newUrl;
                   }
                 }));
-                this.subscriptions.add(newSubscription);
-              }
+              this.subscriptions.add(newSubscription);
             } else {
               this.handleRequest(key, this.evalExpression(url));
             }
           }
         }
-
-        // @DEPRECATED
-        // for (const key in data.builderData) {
-        //   const url = data.builderData[key]
-        //   if (url && !this.data[key]) {
-        //     this.handleBuilderRequest(key, this.evalExpression(url))
-        //   }
-        // }
       }
     }
   };

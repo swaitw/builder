@@ -1,21 +1,15 @@
-import { isEditing } from './functions/is-editing';
+// ignore prettier formatting for this file because the order of exports is meaningful
+// prettier-ignore
+export * from './index-helpers/top-of-file.js';
 
-if (isEditing()) {
-  import('./scripts/init-editing');
-}
+/**
+ * In the React SDK, this file is marked with `use client`.
+ */
+// prettier-ignore
+export * from './index-helpers/blocks-exports.js';
 
-// TODO: lazy option
-export { default as Columns } from './blocks/columns.lite';
-export { default as Image } from './blocks/image.lite';
-export { default as Text } from './blocks/text.lite';
-export { default as Video } from './blocks/video.lite';
-export { default as Symbol } from './blocks/symbol.lite';
-export { default as Button } from './blocks/button.lite';
-export { default as Section } from './blocks/section.lite';
-export { default as Fragment } from './blocks/fragment.lite';
-export { default as RenderContent } from './components/render-content.lite';
-
-export * from './functions/register-component';
-export * from './functions/register';
-export * from './functions/set-editor-settings';
-export * from './functions/get-content';
+/**
+ * In the React SDK, this file is not marked with `use client`, to allow
+ * NextJS App Directory to use the SDK helper functions without issues.
+ */
+export * from './server-index.js';

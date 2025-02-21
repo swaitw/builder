@@ -6,6 +6,7 @@ import { BuilderElement } from '@builder.io/sdk';
 import { BuilderBlocks } from '../components/builder-blocks.component';
 import { withBuilder } from '../functions/with-builder';
 import { Link } from '../components/Link';
+import { Breakpoints, getSizesForBreakpoints } from '../constants/device-sizes.constant';
 
 const DEFAULT_ASPECT_RATIO = 0.7004048582995948;
 
@@ -79,12 +80,18 @@ class ColumnsComponent extends React.Component<any> {
 
   getColumnWidth(index: number) {
     const { columns, gutterSize } = this;
-    const subtractWidth = (gutterSize * (columns.length - 1)) / columns.length;
-    return `calc(${this.getWidth(index)}% - ${subtractWidth}px)`;
+    const width = this.getWidth(index);
+
+    const subtractWidth = gutterSize * (columns.length - 1) * (width / 100);
+
+    return `calc(${width}% - ${subtractWidth}px)`;
   }
 
   render() {
     const { columns, gutterSize } = this;
+    const contentBreakpoints: Breakpoints =
+      this.props.builderState?.context.builderContent?.meta?.breakpoints || {};
+    const breakpointSizes = getSizesForBreakpoints(contentBreakpoints);
 
     return (
       // FIXME: make more elegant
@@ -94,7 +101,11 @@ class ColumnsComponent extends React.Component<any> {
           css={{
             display: 'flex',
             ...(this.props.stackColumnsAt !== 'never' && {
-              [`@media (max-width: ${this.props.stackColumnsAt !== 'tablet' ? 639 : 999}px)`]: {
+              [`@media (max-width: ${
+                this.props.stackColumnsAt !== 'tablet'
+                  ? breakpointSizes.small.max
+                  : breakpointSizes.medium.max
+              }px)`]: {
                 flexDirection: this.props.reverseColumnsWhenStacked ? 'column-reverse' : 'column',
                 alignItems: 'stretch',
               },
@@ -125,7 +136,9 @@ class ColumnsComponent extends React.Component<any> {
                     marginLeft: index === 0 ? 0 : gutterSize,
                     ...(this.props.stackColumnsAt !== 'never' && {
                       [`@media (max-width: ${
-                        this.props.stackColumnsAt !== 'tablet' ? 639 : 999
+                        this.props.stackColumnsAt !== 'tablet'
+                          ? breakpointSizes.small.max
+                          : breakpointSizes.medium.max
                       }px)`]: {
                         width: '100%',
                         marginLeft: 0,

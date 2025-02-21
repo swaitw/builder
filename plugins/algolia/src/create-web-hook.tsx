@@ -5,32 +5,42 @@ export const createWebhook = async (model: any) => {
   const pluginSettings = appState.user.organization.value.settings.plugins.get(pluginId);
   const algoliaKey = pluginSettings.get('algoliaKey');
   const algoliaAppId = pluginSettings.get('algoliaAppId');
-  const customHeaders = [];
+  const pluginPrivateKey = await appState.globalState.getPluginPrivateKey(pluginId);
 
-  for (const headerName in appState.user.authHeaders) {
-    customHeaders.push({
-      name: headerName,
-      value: appState.user.authHeaders[headerName],
-    });
+  if (!pluginPrivateKey) {
+    return;
   }
 
   const newWebhook = {
-    customHeaders,
-    url: `${appState.config.apiRoot()}/api/v1/algolia-sync/webhook?algoliaKey=${algoliaKey}&algoliaAppId=${algoliaAppId}&modelName=${
-      model.name
-    }`,
+    meta: {
+      pluginId,
+    },
+    customHeaders: [
+      {
+        name: 'Authorization',
+        value: `Bearer ${pluginPrivateKey}`,
+      },
+    ],
+    url: `${appState.config.apiRoot()}/api/v1/algolia-sync/webhook?algoliaKey=${algoliaKey}&algoliaAppId=${algoliaAppId}&modelId=${
+      model.id
+    }&apiKey=${appState.user.apiKey}`,
     disableProxy: true, // proxy has an issue with the POST request body
   };
 
   // if we have an existing algolia webhook on this model then we need to replace it with the new one
-  let existingAlgoliaHookIndex;
+  let existingAlgoliaHookIndex = -1; // Use -1 instead of null
+
   for (let i = 0; i < model.webhooks.length; i++) {
     const currentHookPath = model.webhooks[i].url?.split('?')[0];
     const newHookPath = newWebhook.url.split('?')[0];
-    existingAlgoliaHookIndex = currentHookPath === newHookPath ? i : null;
+
+    if (currentHookPath === newHookPath) {
+      existingAlgoliaHookIndex = i;
+      break; // Exit loop early once a match is found
+    }
   }
 
-  if (existingAlgoliaHookIndex) {
+  if (existingAlgoliaHookIndex >= 0) {
     model.webhooks[existingAlgoliaHookIndex] = newWebhook;
   } else {
     model.webhooks.push(newWebhook);
