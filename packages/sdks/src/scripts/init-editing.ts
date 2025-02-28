@@ -1,43 +1,83 @@
-import { getTarget } from '../functions/get-target';
-import { isBrowser } from '../functions/is-browser';
-import { register } from '../functions/register';
+import { SDK_VERSION } from '../constants/sdk-version.js';
+import { TARGET } from '../constants/target.js';
+import { isBrowser } from '../functions/is-browser.js';
+import { isFromTrustedHost } from '../functions/is-from-trusted-host.js';
+import { register } from '../functions/register.js';
 
-register('insertMenu', {
-  name: '_default',
-  default: true,
-  items: [
-    { name: 'Box' },
-    { name: 'Text' },
-    { name: 'Image' },
-    { name: 'Columns' },
-    ...(getTarget() === 'reactNative'
-      ? []
-      : [
-          { name: 'Core:Section' },
-          { name: 'Core:Button' },
-          { name: 'Embed' },
-          { name: 'Custom Code' },
-        ]),
-  ],
-});
+export const registerInsertMenu = () => {
+  register('insertMenu', {
+    name: '_default',
+    default: true,
+    items: [
+      { name: 'Box' },
+      { name: 'Text' },
+      { name: 'Image' },
+      { name: 'Columns' },
+      ...(TARGET === 'reactNative'
+        ? []
+        : [
+            { name: 'Core:Section' },
+            { name: 'Core:Button' },
+            { name: 'Embed' },
+            { name: 'Custom Code' },
+          ]),
+    ],
+  });
+};
 
-if (isBrowser()) {
-  window.parent?.postMessage(
-    {
-      type: 'builder.sdkInfo',
-      data: {
-        target: getTarget(),
-        // TODO: compile these in
-        // type: process.env.SDK_TYPE,
-        // version: process.env.SDK_VERSION,
-        supportsPatchUpdates: false,
+let isSetupForEditing = false;
+export const setupBrowserForEditing = (options: {
+  modelName: string;
+  apiKey: string;
+  enrich?: boolean;
+  includeRefs?: boolean;
+  locale?: string;
+  trustedHosts?: string[];
+}) => {
+  if (isSetupForEditing) {
+    return;
+  }
+  isSetupForEditing = true;
+  if (isBrowser()) {
+    window.parent?.postMessage(
+      {
+        type: 'builder.sdkInfo',
+        data: {
+          target: TARGET,
+          version: SDK_VERSION,
+          supportsPatchUpdates: false,
+          // Supports builder-model="..." attribute which is needed to
+          // scope our '+ add block' button styling
+          supportsAddBlockScoping: true,
+          supportsCustomBreakpoints: true,
+          modelName: options.modelName,
+          apiKey: options.apiKey,
+          supportsXSmallBreakpoint: TARGET === 'reactNative' ? false : true,
+          blockLevelPersonalization: true,
+        },
       },
-    },
-    '*'
-  );
+      '*'
+    );
 
-  window.addEventListener('message', ({ data }) => {
-    if (data) {
+    window.parent?.postMessage(
+      {
+        type: 'builder.updateContent',
+        data: {
+          options,
+        },
+      },
+      '*'
+    );
+
+    window.addEventListener('message', (event: MessageEvent) => {
+      if (!isFromTrustedHost(options.trustedHosts, event)) {
+        return;
+      }
+      const { data } = event;
+      if (!data?.type) {
+        return;
+      }
+
       switch (data.type) {
         case 'builder.evaluate': {
           const text = data.data.text;
@@ -48,9 +88,10 @@ if (isBrowser()) {
           let result: any;
           let error: Error | null = null;
           try {
+            // eslint-disable-next-line prefer-spread
             result = fn.apply(null, args);
           } catch (err) {
-            error = err;
+            error = err as Error;
           }
 
           if (error) {
@@ -64,7 +105,7 @@ if (isBrowser()) {
           } else {
             if (result && typeof result.then === 'function') {
               (result as Promise<any>)
-                .then(finalResult => {
+                .then((finalResult) => {
                   window.parent?.postMessage(
                     {
                       type: 'builder.evaluateResult',
@@ -87,6 +128,6 @@ if (isBrowser()) {
           break;
         }
       }
-    }
-  });
-}
+    });
+  }
+};

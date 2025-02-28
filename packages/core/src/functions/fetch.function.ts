@@ -6,7 +6,7 @@ export interface SimplifiedFetchOptions {
   headers?: { [key: string]: string };
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   credentials?: 'include';
-  mode?: string;
+  mode?: RequestMode;
 }
 
 export interface SimpleFetchResponse {
@@ -31,7 +31,7 @@ function promiseResolve<T>(value: T) {
 }
 
 // Adapted from https://raw.githubusercontent.com/developit/unfetch/master/src/index.mjs
-export function tinyFetch(url: string, options: SimplifiedFetchOptions = {}) {
+function tinyFetch(url: string, options: SimplifiedFetchOptions = {}) {
   return new Promise<SimpleFetchResponse>((resolve, reject) => {
     const request = new XMLHttpRequest();
 
@@ -90,11 +90,25 @@ export function tinyFetch(url: string, options: SimplifiedFetchOptions = {}) {
   });
 }
 
-export const fetch: typeof tinyFetch /* | typeof window.fetch */ =
-  typeof global === 'object' && typeof (global as any).fetch === 'function'
-    ? (global as any).fetch
-    : typeof window === 'undefined'
-    ? serverOnlyRequire('node-fetch')
-    : typeof window.fetch !== 'undefined'
-    ? window.fetch
-    : tinyFetch;
+export function getFetch() {
+  // If fetch is defined, in the browser, via polyfill, or in a Cloudflare worker, use it.
+  let _fetch: typeof fetch | undefined = undefined;
+  if (globalThis.fetch) {
+    _fetch ??= globalThis.fetch as any;
+  } else if (typeof window === 'undefined') {
+    // If fetch is not defined, in a Node.js environment, use node-fetch.
+    try {
+      // node-fetch@^3 is ESM only, and will throw error on require.
+      _fetch ??= serverOnlyRequire('node-fetch');
+    } catch (e) {
+      // If node-fetch is not installed, use tiny-fetch.
+      console.warn(
+        'node-fetch is not installed. consider polyfilling fetch or installing node-fetch.'
+      );
+      console.warn(e);
+    }
+  }
+
+  // Otherwise, use tiny-fetch.
+  return _fetch ?? tinyFetch;
+}

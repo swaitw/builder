@@ -7,15 +7,17 @@ import {
   Optional,
   OnDestroy,
   OnInit,
+  OnChanges,
   ViewContainerRef,
   ElementRef,
+  SimpleChanges,
 } from '@angular/core';
 import { Router, NavigationEnd } from '@angular/router';
-import { parse } from 'url';
 import { BuilderComponentService } from './builder-component.service';
 import { GetContentOptions, Builder } from '@builder.io/sdk';
 import { Subscription, BehaviorSubject } from 'rxjs';
 import { BuilderService } from '../../services/builder.service';
+import { ANGULAR_LATEST_VERSION, SCRIPT_ID } from '../../utils/constants';
 
 function omit<T extends object>(obj: T, ...values: (keyof T)[]): Partial<T> {
   const newObject = Object.assign({}, obj);
@@ -61,7 +63,7 @@ export interface RouteEvent {
   providers: [BuilderComponentService],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class BuilderComponentComponent implements OnDestroy, OnInit {
+export class BuilderComponentComponent implements OnDestroy, OnInit, OnChanges {
   @Input() model: string | undefined /* THIS IS ACTUALLY REQUIRED */;
 
   @Input() set name(name: string | undefined) {
@@ -78,6 +80,7 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
   @Input() options: GetContentOptions | null = null;
 
   @Input() data: any = {};
+  @Input() context: any = {};
   @Input() hydrate = true;
   @Input() prerender = true;
 
@@ -107,7 +110,6 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
   ) {}
 
   async ensureWCScriptLoaded() {
-    const SCRIPT_ID = 'builder-wc-script';
     if (!Builder.isBrowser || wcScriptInserted || document.getElementById(SCRIPT_ID)) {
       return;
     }
@@ -123,8 +125,7 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
       return null;
     }
     const script = document.createElement('script');
-
-    const wcVersion = getQueryParam(location.href, 'builder.wcVersion');
+    const wcVersion = getQueryParam(location.href, 'builder.wcVersion') || ANGULAR_LATEST_VERSION;
     script.id = SCRIPT_ID;
     // TODO: detect builder.wcVersion and if customEleemnts exists and do
     // dynamic versions and lite here
@@ -152,6 +153,7 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
         this.builderService.userAttributesChanged.subscribe((attrs) =>
           builder.setUserAttributes(attrs)
         );
+        this.triggerstateChange();
       });
     }
   }
@@ -192,6 +194,23 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
 
     if (Builder.isBrowser && (this.hydrate !== false || Builder.isEditing)) {
       this.ensureWcLoadedAndUpdate();
+    }
+  }
+
+  async triggerstateChange() {
+    const query = `builder-component-element[name="${this.model}"]`;
+    const element: any = document.querySelector(query);
+    if (element) {
+      customElements.whenDefined('builder-component-element').then(() => {
+        element.setState(this.data);
+        element.setContext(this.context);
+      });
+    }
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes.data) {
+      this.triggerstateChange();
     }
   }
 
@@ -301,13 +320,20 @@ export class BuilderComponentComponent implements OnDestroy, OnInit {
   }
 
   private isRelative(href: string) {
-    return !href.match(/^(\/\/|https?:\/\/)/i);
+    return (
+      !href.match(/^(\/\/|https?:\/\/)/i) &&
+      // Handle Mailto and Tel links
+      !href.startsWith('tel:') &&
+      !href.startsWith('mailto:') &&
+      // Handle local hash links
+      !href.startsWith('#')
+    );
   }
 
   // Attempt to convert an absolute url to relative if possible (aka if the hosts match)
   private convertToRelative(href: string) {
-    const currentUrl = parse(location.href);
-    const hrefUrl = parse(href);
+    const currentUrl = new URL(location.href);
+    const hrefUrl = new URL(href);
 
     if (currentUrl.host === hrefUrl.host) {
       const relativeUrl = hrefUrl.pathname + (hrefUrl.search ? hrefUrl.search : '');

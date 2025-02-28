@@ -1,6 +1,8 @@
+'use client';
 import React from 'react';
 import { BuilderElement } from '@builder.io/sdk';
 import { withBuilder } from '../../functions/with-builder';
+import { IMAGE_FILE_TYPES } from 'src/constants/file-types.constant';
 
 export interface ImgProps {
   attributes?: any;
@@ -35,7 +37,7 @@ export const Img = withBuilder(ImgComponent, {
       name: 'image',
       bubble: true,
       type: 'file',
-      allowedFileTypes: ['jpeg', 'jpg', 'png', 'svg'],
+      allowedFileTypes: IMAGE_FILE_TYPES,
       required: true,
     },
   ],

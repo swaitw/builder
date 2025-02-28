@@ -14,14 +14,13 @@ const resolvePlugin = resolve();
 
 const externalDependencies = Object.keys(pkg.dependencies)
   .concat(Object.keys(pkg.optionalDependencies || {}))
-  .filter(item => item !== 'tslib');
-// TODO: go back to using peerDependencies once fix rollup iife issue
-// .concat(Object.keys(pkg.peerDependencies || {}))
+  .filter(item => item !== 'tslib')
+  .concat(Object.keys(pkg.peerDependencies || {}));
 
 const options = {
   input: `src/${libraryName}.ts`,
   // Indicate here external modules you don't wanna include in your bundle (i.e.: 'lodash')
-  external: ['vm2'],
+  external: ['isolated-vm'],
   watch: {
     include: '../**',
   },
@@ -30,9 +29,8 @@ const options = {
       include: ['*.js+(|x)', '*.ts+(|x)', '**/*.ts+(|x)'],
       tsconfigOverride: {
         compilerOptions: {
-          // No need to type check and gen over and over, we do once at beggingn of builder with `tsc`
+          // No need to type check and gen over and over, we do once at beginning of builder with `tsc`
           declaration: false,
-          check: false,
           checkJs: false,
           allowJs: true,
         },
@@ -46,16 +44,19 @@ const options = {
     // Compile TypeScript files
     // Allow bundling cjs modules (unlike webpack, rollup doesn't understand cjs)
     commonjs({
-      exclude: ['node_modules/vm2/**'],
+      exclude: ['node_modules/isolated-vm/**'],
       namedExports: {
         'node_modules/react/index.js': [
           'cloneElement',
           'createContext',
           'useContext',
           'Component',
+          'useRef',
           'createElement',
           'forwardRef',
           'Fragment',
+          'useEffect',
+          'useState',
         ],
         'node_modules/react-dom/index.js': ['render', 'hydrate'],
         'node_modules/react-is/index.js': ['isElement', 'isValidElementType', 'ForwardRef'],
@@ -95,7 +96,7 @@ export default [
       { file: pkg.module, format: 'es', sourcemap: true },
       { file: pkg.main, format: 'cjs', sourcemap: true },
     ],
-    external: externalDependencies,
+    external: externalDependencies.concat('node-fetch'),
     plugins: options.plugins
       .filter(plugin => plugin !== resolvePlugin)
       .concat([

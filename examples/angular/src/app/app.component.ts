@@ -1,6 +1,6 @@
 import { BuilderBlock } from '@builder.io/angular';
 import { Component, Input } from '@angular/core';
-import { GetContentOptions } from '@builder.io/sdk';
+import './with-children';
 
 @Component({
   selector: 'custom-thing',
@@ -29,8 +29,11 @@ BuilderBlock({
 })
 export class AppComponent {
   title = 'app';
-  options: GetContentOptions = {
+  options: any = {
     cacheSeconds: 1,
+    data: {
+      locale: 'en-US',
+    },
   };
 
   data = {

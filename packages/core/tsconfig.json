@@ -3,6 +3,7 @@
     "target": "es5",
     "outDir": "dist",
     "module": "esnext",
+    "composite": true,
     "strict": true,
     "sourceMap": true,
     "skipLibCheck": true,
@@ -15,5 +16,5 @@
     "esModuleInterop": true,
     "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["./index.ts", "./src/**/*.ts", "./types.d.ts"]
+  "include": ["./package.json", "./index.ts", "./src/**/*.ts", "./types.d.ts"]
 }

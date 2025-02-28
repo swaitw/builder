@@ -1,8 +1,9 @@
-import { expect, test } from '@jest/globals';
-import { getProcessedBlock } from './get-processed-block';
+import type { BuilderBlock } from '../types/builder-block.js';
+import { getProcessedBlock } from './get-processed-block.js';
 
 test('Can process bindings', () => {
-  const block = {
+  const block: BuilderBlock = {
+    '@type': '@builder.io/sdk:Element',
     properties: {
       foo: 'bar',
     },
@@ -11,17 +12,23 @@ test('Can process bindings', () => {
       'responsiveStyles.large.zIndex': '1 + 1',
       'properties.test': 'state.test',
       'properties.block': `
-        const foo = 'bar';
+        var foo = 'bar';
         return foo;
       `,
       'properties.isEditing': 'builder.isEditing',
     },
   };
-  const processed = getProcessedBlock({ block, context: {}, state: { test: 'hello' } });
+  const processed = getProcessedBlock({
+    block,
+    context: {},
+    rootState: { test: 'hello' },
+    rootSetState: undefined,
+    localState: undefined,
+  });
   expect(processed).not.toEqual(block);
-  expect(processed.properties.foo).toEqual('baz');
-  expect((processed.properties as any).test).toEqual('hello');
-  expect((processed.properties as any).block).toEqual('bar');
-  expect((processed.properties as any).isEditing).toEqual(false);
-  expect((processed as any).responsiveStyles.large.zIndex).toEqual(2);
+  expect(processed.properties?.foo).toEqual('baz');
+  expect(processed.properties?.test).toEqual('hello');
+  expect(processed.properties?.block).toEqual('bar');
+  expect(processed.properties?.isEditing).toEqual(false);
+  expect(processed.responsiveStyles?.large?.zIndex).toEqual(2);
 });

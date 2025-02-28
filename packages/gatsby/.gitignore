@@ -1,2 +1,4 @@
 /*.js
+/plugins
 yarn.lock
+batching

@@ -1,3 +1,4 @@
+'use client';
 import React from 'react';
 import { BuilderElement, Builder } from '@builder.io/sdk';
 import { withBuilder } from '../functions/with-builder';
@@ -58,16 +59,16 @@ class CustomCodeComponent extends React.Component<Props> {
   replaceNodes = false;
   state = {
     hydrated: false,
-  }
+  };
 
   constructor(props: Props) {
     super(props);
-    if (Builder.isBrowser){
+    if (Builder.isBrowser) {
       const id = this.props.builderBlock?.id;
       this.replaceNodes = Boolean(
         Builder.isBrowser && (props.replaceNodes || isShopify) && id && globalReplaceNodes?.[id]
       );
-  
+
       if (this.firstLoad && this.props.builderBlock) {
         if (id && globalReplaceNodes?.[id]) {
           const el = globalReplaceNodes[id].shift() || null;
@@ -87,7 +88,10 @@ class CustomCodeComponent extends React.Component<Props> {
         }
       }
     }
+  }
 
+  shouldComponentUpdate(nextProps: Readonly<Props>): boolean {
+    return nextProps.code !== this.props.code;
   }
 
   get noReactRender() {
@@ -112,7 +116,7 @@ class CustomCodeComponent extends React.Component<Props> {
         // first render need to match what's on ssr (issue with next.js)
         this.setState({
           hydrated: true,
-        })
+        });
         Builder.nextTick(() => this.findAndRunScripts());
       } else {
         this.findAndRunScripts();
@@ -159,7 +163,10 @@ class CustomCodeComponent extends React.Component<Props> {
 
   get code() {
     // when ssr'd by nextjs it'll break hydration if initial client render doesn't match ssr
-    if ((Builder.isServer || this.isHydrating && this.firstLoad) && this.props.scriptsClientOnly) {
+    if (
+      (Builder.isServer || (this.isHydrating && this.firstLoad)) &&
+      this.props.scriptsClientOnly
+    ) {
       return (this.props.code || '').replace(
         /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
         ''
@@ -175,7 +182,7 @@ class CustomCodeComponent extends React.Component<Props> {
       <div
         ref={ref => (this.elementRef = ref)}
         // TODO: add a class when node replaced in (?)
-        className='builder-custom-code'
+        className="builder-custom-code"
         {...(!this.replaceNodes &&
           !this.noReactRender && {
             dangerouslySetInnerHTML: { __html: this.code },

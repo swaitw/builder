@@ -1,11 +1,21 @@
 {
   "compilerOptions": {
     "strict": true,
-    "target": "es5",
+    "target": "ESNext",
     "jsx": "preserve",
-    "esModuleInterop": true,
+    "jsxImportSource": "@builder.io/mitosis",
+    "lib": ["dom", "ESNext"],
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "allowJs": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["vitest/globals"],
+    "paths": {
+      "placeholder-runtime": ["./src/functions/evaluate/placeholder-runtime.js"]
+    },
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src/**/*", "typings", "mitosis.config.cjs", "output-generation"]
 }

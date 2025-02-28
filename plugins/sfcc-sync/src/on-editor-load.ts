@@ -1,5 +1,6 @@
 import appState from '@builder.io/app-context';
 import { getSFCCWebhookIndex } from './utils';
+import pkg from '../package.json';
 
 interface ContentEditorActions {
   updatePreviewUrl: (url: string) => void;
@@ -13,6 +14,10 @@ interface ContentEditorActions {
 }
 
 export const onContentEditorLoad = ({ safeReaction, updatePreviewUrl }: ContentEditorActions) => {
+  const pluginSettings = appState.user.organization.value.settings.plugins?.get(pkg.name);
+  if (pluginSettings?.get('disableURLUpdates')) {
+    return;
+  }
   safeReaction(
     () =>
       appState.designerState.editingContentModel?.meta.get('sfccPreviewOptions') ||
@@ -22,10 +27,18 @@ export const onContentEditorLoad = ({ safeReaction, updatePreviewUrl }: ContentE
         // running on a non sfcc model
         return;
       }
+      const urlOverride = appState.location.query.get('overridePreviewUrl');
+      if (urlOverride) {
+        // chrome extension now appends the preview url from context, no need to update if so
+        return;
+      }
       if (obj) {
         const options = JSON.parse(JSON.stringify(obj));
-        const { apiPath, libraryName, assetId } = options;
-        const previewUrl = `${apiPath}/s/${libraryName}/${assetId}.html`.trim();
+        const pluginSettings = appState.user.organization.value.settings.plugins?.get(pkg.name);
+        const previewUrl = getPath({
+          ...options,
+          libraryName: pluginSettings?.get('previewLibraryName') || options.libraryName,
+        });
         setTimeout(() => updatePreviewUrl(previewUrl), 500);
         appState.snackBar.show(`Previewing ${previewUrl}`);
       } else {
@@ -37,4 +50,17 @@ export const onContentEditorLoad = ({ safeReaction, updatePreviewUrl }: ContentE
       }
     }
   );
+};
+
+export const getPath = (options: {
+  apiPath: string;
+  libraryName: string;
+  assetId: string;
+  pathPrefix?: string;
+}) => {
+  const { apiPath, libraryName, assetId, pathPrefix = '' } = options;
+  const parts = pathPrefix.split('/');
+  return `${apiPath}/s/${libraryName}/${
+    pathPrefix ? `${parts.filter(p => p).join('/')}/` : ''
+  }${assetId}.html`.trim();
 };

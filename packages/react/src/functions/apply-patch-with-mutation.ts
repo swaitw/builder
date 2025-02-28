@@ -1,8 +1,8 @@
-export const applyPatchWithMinimalMutationChain = (
-  obj: any,
+export const applyPatchWithMinimalMutationChain = <T extends object>(
+  obj: T,
   patch: { path: string; op: 'add' | 'remove' | 'replace'; value: any },
-  preserveRoot = true
-) => {
+  preserveRoot = false
+): T => {
   if (Object(obj) !== obj) {
     return obj;
   }
@@ -13,7 +13,7 @@ export const applyPatchWithMinimalMutationChain = (
   }
 
   const newObj = preserveRoot ? obj : { ...obj };
-  let objPart = newObj;
+  let objPart = newObj as any;
   for (let i = 0; i < pathArr.length; i++) {
     const isLast = i === pathArr.length - 1;
     const property = pathArr[i];
@@ -45,8 +45,8 @@ export const applyPatchWithMinimalMutationChain = (
         Object(objPart[property]) === objPart[property]
           ? objPart[property]
           : String(Number(nextProperty)) === nextProperty
-          ? []
-          : {};
+            ? []
+            : {};
       objPart = objPart[property] = Array.isArray(newPart) ? [...newPart] : { ...newPart };
     }
   }

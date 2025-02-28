@@ -7,6 +7,8 @@ import { BuilderElement, Builder } from '@builder.io/sdk';
 import { BuilderMetaContext } from '../store/builder-meta';
 import { withBuilder } from '../functions/with-builder';
 import { throttle } from '../functions/throttle';
+import { Breakpoints, getSizesForBreakpoints } from '../constants/device-sizes.constant';
+import { IMAGE_FILE_TYPES } from 'src/constants/file-types.constant';
 
 // Taken from (and modified) the shopify theme script repo
 // https://github.com/Shopify/theme-scripts/blob/bcfb471f2a57d439e2f964a1bb65b67708cc90c3/packages/theme-images/images.js#L59
@@ -92,7 +94,11 @@ export function getSrcSet(url: string): string {
   return url;
 }
 
-export const getSizes = (sizes: string, block: BuilderElement) => {
+export const getSizes = (
+  sizes: string,
+  block: BuilderElement,
+  contentBreakpoints: Breakpoints = {}
+) => {
   let useSizes = '';
 
   if (sizes) {
@@ -113,13 +119,14 @@ export const getSizes = (sizes: string, block: BuilderElement) => {
       })
       .join(', ');
   } else if (block && block.responsiveStyles) {
-    const generatedSizes = [];
+    const generatedSizes: string[] = [];
     let hasSmallOrMediumSize = false;
     const unitRegex = /^\d+/;
 
+    const breakpointSizes = getSizesForBreakpoints(contentBreakpoints);
     if (block.responsiveStyles?.small?.width?.match(unitRegex)) {
       hasSmallOrMediumSize = true;
-      const mediaQuery = '(max-width: 639px)';
+      const mediaQuery = `(max-width: ${breakpointSizes.small.max}px)`;
       const widthAndQuery = `${mediaQuery} ${block.responsiveStyles.small.width.replace(
         '%',
         'vw'
@@ -129,7 +136,7 @@ export const getSizes = (sizes: string, block: BuilderElement) => {
 
     if (block.responsiveStyles?.medium?.width?.match(unitRegex)) {
       hasSmallOrMediumSize = true;
-      const mediaQuery = '(max-width: 999px)';
+      const mediaQuery = `(max-width: ${breakpointSizes.medium.max}px)`;
       const widthAndQuery = `${mediaQuery} ${block.responsiveStyles.medium.width.replace(
         '%',
         'vw'
@@ -155,12 +162,15 @@ export const getSizes = (sizes: string, block: BuilderElement) => {
 // TODO: use picture tag to support more formats
 class ImageComponent extends React.Component<any, { imageLoaded: boolean; load: boolean }> {
   get useLazyLoading() {
+    if (this.props.highPriority) {
+      return false;
+    }
     // Use builder.getLocation()
     return Builder.isBrowser && location.search.includes('builder.lazyLoadImages=false')
       ? false
       : Builder.isBrowser && location.href.includes('builder.lazyLoadImages=true')
-      ? true
-      : this.props.lazy;
+        ? true
+        : this.props.lazy;
   }
 
   // TODO: setting to always fade in the images (?)
@@ -253,7 +263,11 @@ class ImageComponent extends React.Component<any, { imageLoaded: boolean; load: 
 
   getSrcSet(): string | undefined {
     const url = this.image;
-    if (!url) {
+    if (!url || typeof url !== 'string') {
+      return;
+    }
+
+    if (this.props.noWebp) {
       return;
     }
 
@@ -267,11 +281,15 @@ class ImageComponent extends React.Component<any, { imageLoaded: boolean; load: 
   }
 
   render() {
-    const { aspectRatio, lazy } = this.props;
+    const { aspectRatio, lazy, builderBlock, builderState } = this.props;
     const children = this.props.builderBlock && this.props.builderBlock.children;
 
     let srcset = this.props.srcset;
-    const sizes = getSizes(this.props.sizes, this.props.builderBlock);
+    const sizes = getSizes(
+      this.props.sizes,
+      builderBlock,
+      builderState?.context.builderContent?.meta?.breakpoints || {}
+    );
     const image = this.image;
 
     if (srcset && image && image.includes('builder.io/api/v1/image')) {
@@ -283,6 +301,8 @@ class ImageComponent extends React.Component<any, { imageLoaded: boolean; load: 
       srcset = this.getSrcSet();
     }
 
+    const isPixel = builderBlock?.id.startsWith('builder-pixel-');
+    const eagerLoad = isPixel || this.props.highPriority;
     const { fitContent } = this.props;
 
     return (
@@ -331,7 +351,8 @@ class ImageComponent extends React.Component<any, { imageLoaded: boolean; load: 
                   },
                 }),
               }}
-              loading="lazy"
+              loading={eagerLoad ? 'eager' : 'lazy'}
+              fetchPriority={eagerLoad ? 'high' : 'auto'}
               className={'builder-image' + (this.props.className ? ' ' + this.props.className : '')}
               src={this.image}
               {...(!amp && {
@@ -422,10 +443,10 @@ export const Image = withBuilder(ImageComponent, {
       name: 'image',
       type: 'file',
       bubble: true,
-      allowedFileTypes: ['jpeg', 'jpg', 'png', 'svg'],
+      allowedFileTypes: IMAGE_FILE_TYPES,
       required: true,
       defaultValue:
-        'https://cdn.builder.io/api/v1/image/assets%2Fpwgjf0RoYWbdnJSbpBAjXNRMe9F2%2Ffb27a7c790324294af8be1c35fe30f4d',
+        'https://cdn.builder.io/api/v1/image/assets%2FYJIGb4i01jvw0SRdL5Bt%2F72c80f114dc149019051b6852a9e3b7a',
       onChange: (options: Map<string, any>) => {
         const DEFAULT_ASPECT_RATIO = 0.7041;
         options.delete('srcset');
@@ -499,7 +520,7 @@ export const Image = withBuilder(ImageComponent, {
         {
           label: 'cover',
           value: 'cover',
-          helperText: `The image should fill it's box, cropping when needed`,
+          helperText: `The image should fill its box, cropping when needed`,
         },
         // TODO: add these options back
         // { label: 'auto', value: 'auto', helperText: '' },
@@ -526,6 +547,13 @@ export const Image = withBuilder(ImageComponent, {
       name: 'altText',
       type: 'string',
       helperText: 'Text to display when the user has images off',
+    },
+    {
+      name: 'highPriority',
+      type: 'boolean',
+      advanced: true,
+      helperText:
+        'Mark this image as high priority compared to other images on the page. This prevents lazy loading of the image and tells the browser to load this image before others on the page.',
     },
     {
       name: 'height',

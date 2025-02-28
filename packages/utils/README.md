@@ -59,7 +59,7 @@ export async function getStaticProps(context) {
 
 ### Example
 
-Say you have multiple components that take a query input and you want to resolve this query asynchronusly before rendering on the server
+Say you have multiple components that take a query input and you want to resolve this query asynchronously before rendering on the server
 
 ```tsx
 import { Builder } from '@builder.io/react';
@@ -151,3 +151,89 @@ export async function getStaticProps(context) {
   return { props: { content } };
 }
 ```
+
+## transformComponents
+
+Transforms builder content usage of multiple components to another.
+
+### Example
+
+This example replaces all `ProductsGrid` components in a builder content into a `ProductsSlider` which accepts slightly different inputs.
+
+```tsx
+import { Builder } from '@builder.io/react';
+
+function ProductsGrid(props) {
+  // props: { category: string }
+  const data = useProductData(props.category);
+  return <Grid products={data} />;
+}
+
+Builder.registerComponent(ProductsGrid, {
+  name: 'ProductsGrid',
+  inputs: [{ name: 'category', type: 'string', enum: ['men', 'women'] }],
+});
+```
+
+```tsx
+import { Builder } from '@builder.io/react';
+
+function ProductsSlider(props) {
+  // props: { collection: string }
+  const data = useProductData(props.collection);
+  return <Slider products={data} />;
+}
+
+Builder.registerComponent(ProductsSlider, {
+  name: 'ProductsSlider',
+  inputs: [{ name: 'collection', type: 'string', enum: ['men', 'women'] }],
+});
+```
+
+Notice the different input name between both components, in order to replace `ProductsGrid` with `ProductsSlider` will need to run `transformComponents` specifiying how inputs of one map to the other.
+
+```tsx
+import { transformComponents } from '@builder.io/utils';
+
+function updateGridToSlider(builderContent) {
+  return transformComponents(builderContent, {
+    ProductsGrid: {
+      name: 'ProductsSlider',
+      props: {
+        // map productsSlider collection input to ProductsGrid category input
+        collection: 'category',
+      },
+    },
+  });
+}
+```
+
+note: This can break content if the transformation was incorrect, recommend duplicating content and testing on non-live duplicates.
+
+## setPixelProperties
+
+`setPixelProperties` allows you to add more pixel element properties, for example , `alt`
+
+### Example
+
+```ts
+import { setPixelProperties } from '@builder.io/utils';
+
+export async function getServerSideProps({
+  params,
+}) {
+  const page =
+    (await builder
+      .get(mode, ....)
+      .toPromise()) || null
+     
+  setPixelProperties(page, { alt: 'pixel tag from builder' })
+  
+  return {
+    props: {
+      page,
+    },
+  }
+}
+```
+note: Pixels will have `alt` by default in next API verison (`v3`);
